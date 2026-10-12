@@ -1,0 +1,8 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+.env
+keys.txt
+venv/
+__pycache__/
+*.pyc
+audit_log.jsonl
+governed_agent.db
