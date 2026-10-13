@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+      "governed-db": {
+        "command": "${workspaceFolder}/venv/bin/python",
+        "args": ["${workspaceFolder}/mcp_server.py"]
+      }
+    }
+  }
