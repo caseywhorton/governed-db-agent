@@ -39,13 +39,15 @@ def query_data(sql: str) -> dict:
 
 
 @mcp.tool()
-def delete_records(table: str, where: str) -> dict:
-    """Delete rows from a table matching a WHERE condition.
+def delete_records(table: str, filters: dict) -> dict:
+    """Request deletion of rows from a table.
 
-    Destructive and irreversible. Classified HIGH risk and currently always
-    denied by the permission layer until human approval is implemented.
+    `filters` maps column names to values; rows must match all of them
+    (for example {"id": 1}). This is a HIGH-risk action: it files an approval
+    request for a human and returns a dry-run preview. Nothing is deleted
+    until a human approves the request.
     """
-    return governed.delete_records(table, where)
+    return governed.delete_records(table, filters)
 
 
 # Long-running process: make sure buffered trace events are sent on shutdown.

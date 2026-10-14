@@ -39,10 +39,15 @@ Tables:
 - transactions(id, account_id, amount, date, flagged)
 
 Use query_data to read data (single SELECT statements only).
-Use delete_records only if the user explicitly asks to delete data.
+Use delete_records only if the user explicitly asks to delete data. It takes a table
+name and a dictionary of column/value filters, for example {"id": 1}.
 
-If a tool returns an error or a denial, report it to the user plainly and stop.
-Do not try to work around it with a different tool or a rephrased query.
+delete_records never deletes anything immediately. It files a request for human
+approval and returns a preview of what would be affected. When it returns status
+"pending_approval", tell the user the request id, summarize the preview (rows
+matched, dependent rows, and whether foreign keys would block it), and say that a
+human must approve it. If a tool returns an error, report it plainly and stop.
+Do not try to work around any refusal with a different tool or a rephrased query.
 """
 
 
@@ -58,9 +63,11 @@ def query_data_tool(sql: str) -> dict:
 
 
 @tool("delete_records")
-def delete_records_tool(table: str, where: str) -> dict:
-    """Delete rows from a table matching a WHERE condition. Destructive and irreversible."""
-    return delete_records(table, where)
+def delete_records_tool(table: str, filters: dict) -> dict:
+    """Request deletion of rows from a table. `filters` maps column names to values;
+    rows must match all of them. This files an approval request for a human and
+    returns a preview. Nothing is deleted until a human approves it."""
+    return delete_records(table, filters)
 
 
 TOOLS = [query_data_tool, delete_records_tool]
