@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 audit_log.jsonl
 governed_agent.db
+approvals.db
