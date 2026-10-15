@@ -125,7 +125,7 @@ For the LangGraph agent, the same traces also capture the model used, token coun
 `audit_log.jsonl` is the raw local record; Langfuse is the reviewable one.
 
 <p align="center">
-  <img src="img/denied-trace.jpg" alt="High-risk delete flagged in Langfuse" width="600"><br>
+  <img src="img/denied_trace_governed_db.jpg" alt="High-risk delete flagged in Langfuse" width="600"><br>
   <em>A HIGH-risk <code>delete_records</code> call flagged at WARNING level. It was not executed.</em>
 </p>
 
