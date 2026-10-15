@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     status TEXT NOT NULL DEFAULT 'pending',
     reviewer TEXT,
     reviewed_at TEXT,
-    result TEXT
+    result TEXT,
+    source TEXT
 )
 """
 
@@ -37,6 +38,11 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
+    # Migrate databases created before the `source` column existed.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(approval_requests)")}
+    if "source" not in columns:
+        conn.execute("ALTER TABLE approval_requests ADD COLUMN source TEXT")
+        conn.commit()
     return conn
 
 
@@ -44,12 +50,15 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def create_request(tool: str, risk: str, args: list, kwargs: dict, preview) -> int:
+def create_request(
+    tool: str, risk: str, args: list, kwargs: dict, preview, source: str = "unknown"
+) -> int:
     """File a new pending request and return its id."""
     with closing(_connect()) as conn:
         cur = conn.execute(
             "INSERT INTO approval_requests "
-            "(created_at, tool, risk, args, kwargs, preview) VALUES (?, ?, ?, ?, ?, ?)",
+            "(created_at, tool, risk, args, kwargs, preview, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 _now(),
                 tool,
@@ -57,6 +66,7 @@ def create_request(tool: str, risk: str, args: list, kwargs: dict, preview) -> i
                 json.dumps(args, default=str),
                 json.dumps(kwargs, default=str),
                 json.dumps(preview, default=str) if preview is not None else None,
+                source,
             ),
         )
         conn.commit()

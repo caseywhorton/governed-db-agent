@@ -30,7 +30,7 @@ The same governed tools are reachable from two different clients, a LangGraph ag
 | `delete_records` with validated, structured filters | Done |
 | Dry-run preview, including foreign-key impact | Done |
 | Human-in-the-loop approval gate (`approvals.py`) | Done |
-| `source` field in the audit log (which client made the call) | Planned |
+| `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | FastAPI wrapper, Docker, CI/CD | Planned (stretch) |
 
 ## How it works
@@ -89,11 +89,11 @@ Design choices behind this:
 | LLM-level traces (model, tokens) | Yes | No, the model runs inside Cursor |
 | Permission checks, audit log, tool traces | Yes | Yes |
 
-Both clients call the same governed functions in `tools.py`, so a request looks identical regardless of who asked. Models may also decline destructive requests on their own before ever calling a tool. That is useful, but it depends on the model and the phrasing; the permission layer is the control that does not.
+Both clients call the same governed functions in `tools.py`, so a request looks the same regardless of who asked, apart from its `source` tag. Models may also decline destructive requests on their own before ever calling a tool. That is useful, but it depends on the model and the phrasing; the permission layer is the control that does not.
 
 ### Audit log
 
-Every tool call attempt is appended to `audit_log.jsonl`. Each entry records the timestamp, tool, risk tier, arguments, and a `decision`:
+Every tool call attempt is appended to `audit_log.jsonl`. Each entry records the timestamp, tool, risk tier, `source` (which client made the call: `langgraph`, `mcp`, `approvals-cli`, or `direct` when a tool is called from a script), arguments, and a `decision`:
 
 | Decision | Meaning |
 |---|---|
@@ -104,8 +104,8 @@ Every tool call attempt is appended to `audit_log.jsonl`. Each entry records the
 | `denied_by_human` | A reviewer denied a request (includes `approver`, `reason`) |
 
 ```json
-{"timestamp": "2026-10-14T09:12:40", "tool": "delete_records", "risk": "HIGH", "decision": "pending_approval", "request_id": 1, "reason": "HIGH risk exceeds autonomous limit (MEDIUM); human approval required"}
-{"timestamp": "2026-10-14T09:14:02", "tool": "delete_records", "risk": "HIGH", "decision": "approved_by_human", "approver": "reviewer", "request_id": 1, "outcome": "ok", "result": {"ok": true, "rows_deleted": 2}}
+{"timestamp": "2026-10-14T09:12:40", "tool": "delete_records", "risk": "HIGH", "source": "langgraph", "decision": "pending_approval", "request_id": 1, "reason": "HIGH risk exceeds autonomous limit (MEDIUM); human approval required"}
+{"timestamp": "2026-10-14T09:14:02", "tool": "delete_records", "risk": "HIGH", "source": "approvals-cli", "requested_via": "langgraph", "decision": "approved_by_human", "approver": "reviewer", "request_id": 1, "outcome": "ok", "result": {"ok": true, "rows_deleted": 2}}
 ```
 
 Note the distinction between `decision` and `outcome`: the permission layer decides whether a tool may run at all, while the tool's own validation decides what it will do once running. A call can be `allowed` by the first and still end in an `error` from the second.
@@ -217,16 +217,14 @@ img/                # screenshots used in this README
 - **Approval is minimal.** There is a single approver, no expiry on pending requests, and no escalation or quorum rules.
 - **Deletes are narrow by design.** Filters support equality only, and there is no cascade option: deleting a row that other rows reference is blocked by foreign keys rather than propagated.
 - **Third-party MCP servers run outside these controls.** Only tools wrapped with `@requires_permission` get risk tiers, approval gating, audit logging, and tracing.
-- **The audit log does not record which client made a call.** Calls from the LangGraph agent and from Cursor produce identical entries. A `source` field is planned.
 - Cursor's model runs inside Cursor, so calls made through the MCP server have tool-level traces but no model or token details. Cursor's own approval prompts are a separate layer from this project's.
 - SELECT validation is a simple prefix check backed by a read-only connection. It is not a full SQL parser, which is why the database-level layer matters.
 - The autonomy policy is a single global setting. A real system would scope permissions per user, per agent, and per environment.
 
 ## Roadmap
 
-1. Add a `source` field to the audit log
-2. Redact sensitive values before logging
-3. Explore database-level credentials so the governed tools are the only route to the data
-4. Authenticated approvers and request expiry
-5. A MEDIUM-risk tool (for example, triggering a dbt run) to exercise the middle tier
-6. Optional: FastAPI wrapper, Docker, GitHub Actions deployment
+1. Redact sensitive values before logging
+2. Explore database-level credentials so the governed tools are the only route to the data
+3. Authenticated approvers and request expiry
+4. A MEDIUM-risk tool (for example, triggering a dbt run) to exercise the middle tier
+5. Optional: FastAPI wrapper, Docker, GitHub Actions deployment

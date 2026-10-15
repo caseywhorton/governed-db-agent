@@ -46,6 +46,20 @@ MAX_AUTONOMOUS_RISK = Risk.MEDIUM
 REGISTRY: dict = {}
 PREVIEWS: dict = {}
 
+# Which client is making calls in this process ("langgraph", "mcp", ...).
+# Each client runs as its own process and sets this once at startup.
+_source = "direct"
+
+
+def set_source(name: str) -> None:
+    """Tag every audit entry, approval request, and trace from this process."""
+    global _source
+    _source = name
+
+
+def get_source() -> str:
+    return _source
+
 
 def log_event(entry: dict) -> None:
     """Append one JSON line to the audit log."""
@@ -69,7 +83,11 @@ def _handle_high_risk(fn, risk, preview, args, kwargs, entry):
             get_client().update_current_span(
                 level="ERROR",
                 status_message=entry["reason"],
-                metadata={"risk": risk.name, "decision": "rejected"},
+                metadata={
+                    "risk": risk.name,
+                    "decision": "rejected",
+                    "source": get_source(),
+                },
             )
             return preview_result
 
@@ -79,6 +97,7 @@ def _handle_high_risk(fn, risk, preview, args, kwargs, entry):
         args=list(args),
         kwargs=kwargs,
         preview=preview_result,
+        source=get_source(),
     )
     entry["decision"] = "pending_approval"
     entry["request_id"] = request_id
@@ -94,6 +113,7 @@ def _handle_high_risk(fn, risk, preview, args, kwargs, entry):
             "risk": risk.name,
             "decision": "pending_approval",
             "request_id": request_id,
+            "source": get_source(),
         },
     )
     return {
@@ -129,6 +149,7 @@ def requires_permission(risk: Risk, preview=None):
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "tool": fn.__name__,
                 "risk": risk.name,
+                "source": get_source(),
                 "args": str(args)[:500],
                 "kwargs": str(kwargs)[:500],
             }
@@ -138,7 +159,11 @@ def requires_permission(risk: Risk, preview=None):
 
             entry["decision"] = "allowed"
             get_client().update_current_span(
-                metadata={"risk": risk.name, "decision": "allowed"}
+                metadata={
+                    "risk": risk.name,
+                    "decision": "allowed",
+                    "source": get_source(),
+                }
             )
             result = fn(*args, **kwargs)
             entry["outcome"] = (

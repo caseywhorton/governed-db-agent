@@ -27,6 +27,8 @@ import tools  # noqa: F401  (importing registers the governed functions)
 import approval_store as store
 from langfuse import get_client, observe
 
+permissions.set_source("approvals-cli")  # tag audit entries from this process
+
 
 def _fmt(obj) -> str:
     return json.dumps(obj, indent=2, default=str)
@@ -35,6 +37,7 @@ def _fmt(obj) -> str:
 def _print_request(req: dict) -> None:
     print(f"Request #{req['id']}  [{req['status']}]")
     print(f"  Filed:    {req['created_at']}")
+    print(f"  Source:   {req['source'] or 'unknown'}")
     print(f"  Tool:     {req['tool']} ({req['risk']} risk)")
     print(f"  Args:     {req['args']}")
     print(f"  Kwargs:   {req['kwargs']}")
@@ -61,7 +64,8 @@ def cmd_list(args) -> None:
         print("No requests found.")
         return
     for r in requests:
-        print(f"#{r['id']:<4} {r['status']:<9} {r['created_at']}  {r['tool']}  {r['args']}")
+        source = r['source'] or 'unknown'
+        print(f"#{r['id']:<4} {r['status']:<9} {source:<14} {r['created_at']}  {r['tool']}  {r['args']}")
 
 
 def cmd_show(args) -> None:
@@ -71,7 +75,12 @@ def cmd_show(args) -> None:
 @observe(name="human-approval")
 def _execute(req: dict, reviewer: str) -> dict:
     get_client().update_current_span(
-        metadata={"request_id": req["id"], "tool": req["tool"], "approver": reviewer}
+        metadata={
+            "request_id": req["id"],
+            "tool": req["tool"],
+            "approver": reviewer,
+            "requested_via": req["source"] or "unknown",
+        }
     )
     fn = permissions.REGISTRY[req["tool"]]
     return fn(*json.loads(req["args"]), **json.loads(req["kwargs"]))
@@ -125,6 +134,8 @@ def cmd_approve(args) -> None:
             "tool": req["tool"],
             "risk": req["risk"],
             "decision": "approved_by_human",
+            "source": permissions.get_source(),
+            "requested_via": req["source"] or "unknown",
             "approver": reviewer,
             "request_id": req["id"],
             "outcome": "ok" if status == "executed" else "error",
@@ -146,6 +157,8 @@ def cmd_deny(args) -> None:
             "tool": req["tool"],
             "risk": req["risk"],
             "decision": "denied_by_human",
+            "source": permissions.get_source(),
+            "requested_via": req["source"] or "unknown",
             "approver": reviewer,
             "request_id": req["id"],
             "reason": args.reason or "denied by reviewer",

@@ -23,6 +23,9 @@ from fastmcp import FastMCP  # noqa: E402
 from langfuse import get_client  # noqa: E402
 
 import tools as governed  # noqa: E402
+from permissions import set_source  # noqa: E402
+
+set_source("mcp")  # tag audit entries from this process
 
 mcp = FastMCP("governed-db")
 

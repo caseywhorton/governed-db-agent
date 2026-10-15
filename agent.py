@@ -24,7 +24,10 @@ from langfuse.langchain import CallbackHandler  # noqa: E402
 from langgraph.graph import START, MessagesState, StateGraph  # noqa: E402
 from langgraph.prebuilt import ToolNode, tools_condition  # noqa: E402
 
+from permissions import set_source  # noqa: E402
 from tools import delete_records, query_data  # noqa: E402
+
+set_source("langgraph")  # tag audit entries from this process
 
 # Choose the LLM provider with LLM_PROVIDER in .env ("anthropic" or "openai").
 # Override the model with LLM_MODEL. Defaults below; use any model your key supports.
