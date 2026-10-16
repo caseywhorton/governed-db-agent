@@ -125,9 +125,18 @@ For the LangGraph agent, the same traces also capture the model used, token coun
 `audit_log.jsonl` is the raw local record; Langfuse is the reviewable one.
 
 <p align="center">
-  <img src="img/denied_trace_governed_db.jpg" alt="High-risk delete flagged in Langfuse" width="600"><br>
-  <em>A HIGH-risk <code>delete_records</code> call flagged at WARNING level. It was not executed.</em>
+  <img src="img/denied_trace_governed_db.jpg" alt="High-risk delete flagged from Langchain agent in Langfuse" width="600"><br>
+  <em>A HIGH-risk <code>delete_records</code> Langfuse Agent call flagged at WARNING level. It was not executed.</em>
 </p>
+
+
+<p align="center">
+  <img src="img/delete_request_mcp_langfuse.jpg" alt="High-risk delete flagged from MCP tool call in Langfuse" width="600"><br>
+  <em>A HIGH-risk <code>delete_records</code> MCP tool call flagged at WARNING level. It was not executed.</em>
+</p>
+
+
+/Users/caseywhorton/ai-governance/governed-db-agent/img/delete_request_mcp_langfuse.jpg
 
 ## Database schema
 
