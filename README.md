@@ -79,6 +79,11 @@ Design choices behind this:
 - **Each request is claimed atomically**, so it can only ever be executed once.
 - **One mechanism for both clients.** Because approval happens out of band, it protects the LangGraph agent and Cursor identically. A graph-level pause would only have covered one of them.
 
+<p align="center">
+  <img src="img/langgraph_agent_delete_request_terminal.jpg" alt="LangGraph agent filing a pending delete request" width="600"><br>
+  <em>The LangGraph agent files a HIGH-risk <code>delete_records</code> request and reports the dry-run preview. Nothing is executed until a human approves.</em>
+</p>
+
 ### Two entry points, one permission layer
 
 | | LangGraph agent (`agent.py`) | Cursor via MCP (`mcp_server.py`) |
@@ -90,6 +95,11 @@ Design choices behind this:
 | Permission checks, audit log, tool traces | Yes | Yes |
 
 Both clients call the same governed functions in `tools.py`, so a request looks the same regardless of who asked, apart from its `source` tag. Models may also decline destructive requests on their own before ever calling a tool. That is useful, but it depends on the model and the phrasing; the permission layer is the control that does not.
+
+<p align="center">
+  <img src="img/mcp_delete_approvals_db.jpg" alt="Pending approval requests from LangGraph and MCP" width="600"><br>
+  <em>Pending <code>delete_records</code> requests from both clients. The <code>source</code> column shows which one filed each request.</em>
+</p>
 
 ### Audit log
 
@@ -134,9 +144,6 @@ For the LangGraph agent, the same traces also capture the model used, token coun
   <img src="img/delete_request_mcp_langfuse.jpg" alt="High-risk delete flagged from MCP tool call in Langfuse" width="600"><br>
   <em>A HIGH-risk <code>delete_records</code> MCP tool call flagged at WARNING level. It was not executed.</em>
 </p>
-
-
-/Users/caseywhorton/ai-governance/governed-db-agent/img/delete_request_mcp_langfuse.jpg
 
 ## Database schema
 
@@ -201,6 +208,11 @@ Open this project as the **top-level folder** in Cursor. The project-level confi
 
 Then enable `governed-db` in Cursor's MCP settings. Two tools should appear: `query_data` and `delete_records`. Cursor's agent can request a delete, but approval still happens in the terminal with `approvals.py`. The server communicates over stdout, so avoid `print()` in code it imports. If you change a tool's signature, toggle the server off and on in MCP settings to reload it.
 
+<p align="center">
+  <img src="img/cursor_delete_attempt.jpg" alt="Cursor requesting a delete through the governed MCP tool" width="600"><br>
+  <em>Cursor's agent calls MCP <code>delete_records</code>. The permission layer files a pending request and leaves the database unchanged.</em>
+</p>
+
 ## Project structure
 
 ```
@@ -221,6 +233,11 @@ img/                # screenshots used in this README
 
 - **The audit log and Langfuse traces store raw queries and arguments; production use would require redaction and access controls.** They can contain sensitive values (identifiers, personal data), and recording them verbatim copies that data into additional, less protected locations: a local file and a third-party observability service. Here the data is synthetic, so this is acceptable for a demo, but a real deployment would mask values before logging, restrict access to both stores, and define retention rules.
 - **The permission layer governs calls that go through the tools, not everything a client can do.** An agent with terminal access, such as Cursor's, could in principle run `sqlite3` against the database file directly and bypass these controls. A real deployment would close that gap with database-level credentials, so the governed path is the agent's only route to the data. This has not been tested here; it is a design boundary.
+
+<p align="center">
+  <img src="img/select_from_approvals_db.jpg" alt="Cursor querying approvals.db directly with sqlite3" width="600"><br>
+  <em>Cursor querying <code>approvals.db</code> with <code>sqlite3</code>. The governed <code>query_data</code> tool cannot read this database; terminal access can.</em>
+</p>
 - **Approver identity is the local OS username, and the approval tool is only separate by convention.** An agent with terminal access could run `approvals.py` itself and type `approve`. Real separation of duties needs an approver identity the agent cannot use, such as authenticated reviewers in a separate service.
 - **`approvals.db` has no integrity protection.** Anyone with write access to the file can alter requests. Approving always re-runs the preview on the stored arguments, so the reviewer sees what will execute, but a production system would sign requests and store them in a controlled service.
 - **Approval is minimal.** There is a single approver, no expiry on pending requests, and no escalation or quorum rules.
