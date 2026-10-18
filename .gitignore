@@ -7,3 +7,4 @@ __pycache__/
 audit_log.jsonl
 governed_agent.db
 approvals.db
+analyst_workspace.db
