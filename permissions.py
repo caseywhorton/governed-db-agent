@@ -166,14 +166,21 @@ def requires_permission(risk: Risk, preview=None):
                 }
             )
             result = fn(*args, **kwargs)
-            entry["outcome"] = (
-                "ok" if isinstance(result, dict) and result.get("ok") else "error"
-            )
-            if entry["outcome"] == "error":
+            is_dict = isinstance(result, dict)
+            blocked = is_dict and bool(result.get("blocked_by_policy"))
+            if blocked:
+                # The tool ran, but a data-protection rule refused the statement.
+                entry["outcome"] = "blocked"
+                entry["violations"] = result.get("violations", [])
+            else:
+                entry["outcome"] = "ok" if is_dict and result.get("ok") else "error"
+            if is_dict and result.get("masked_cells"):
+                entry["masked_cells"] = result["masked_cells"]
+            if entry["outcome"] in ("blocked", "error"):
                 get_client().update_current_span(
-                    level="ERROR",
+                    level="WARNING" if blocked else "ERROR",
                     status_message=str(result.get("error", "unknown error"))
-                    if isinstance(result, dict)
+                    if is_dict
                     else "unknown error",
                 )
             log_event(entry)

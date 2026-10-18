@@ -32,13 +32,29 @@ mcp = FastMCP("governed-db")
 
 @mcp.tool()
 def query_data(sql: str) -> dict:
-    """Run a read-only SQL SELECT query against the database and return the rows.
+    """Run one read-only SQL SELECT (joins, CTEs, window functions, subqueries).
 
-    Tables: customers(id, name, segment, created_at),
+    Source tables: customers(id, name*, segment, created_at),
     accounts(id, customer_id, account_type, balance),
-    transactions(id, account_id, amount, date, flagged).
+    transactions(id, account_id, amount, date, flagged),
+    customer_profiles(customer_id, full_name*, email*, phone*, ssn*, date_of_birth*,
+    street_address*, city, state, credit_band, signup_channel).
+    Columns marked * are restricted personal data: they can't be read, filtered on,
+    joined on or copied, so name specific columns instead of using SELECT * on those tables.
     """
     return governed.query_data(sql)
+
+
+@mcp.tool()
+def write_table(sql: str) -> dict:
+    """Run one CREATE TABLE, CREATE TEMP TABLE or INSERT INTO statement.
+
+    Writes go to the analyst's own workspace, never the source tables. Use
+    CREATE TEMP TABLE for scratch work that later queries in this session can reuse.
+    Existing data can't be updated, replaced or dropped, and statements that would store
+    personal data are rolled back.
+    """
+    return governed.write_table(sql)
 
 
 @mcp.tool()

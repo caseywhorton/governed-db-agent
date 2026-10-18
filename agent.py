@@ -25,7 +25,7 @@ from langgraph.graph import START, MessagesState, StateGraph  # noqa: E402
 from langgraph.prebuilt import ToolNode, tools_condition  # noqa: E402
 
 from permissions import set_source  # noqa: E402
-from tools import delete_records, query_data  # noqa: E402
+from tools import delete_records, query_data, write_table  # noqa: E402
 
 set_source("langgraph")  # tag audit entries from this process
 
@@ -34,23 +34,33 @@ set_source("langgraph")  # tag audit entries from this process
 PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
 DEFAULT_MODELS = {"anthropic": "claude-sonnet-5-5", "openai": "gpt-4.1"}
 
-SYSTEM_PROMPT = """You are a database assistant for a small SQLite database.
+SYSTEM_PROMPT = """You are a data-analyst assistant for a small SQLite database.
 
-Tables:
-- customers(id, name, segment, created_at)
+Tables (source data, read-only):
+- customers(id, name*, segment, created_at)
 - accounts(id, customer_id, account_type, balance)
 - transactions(id, account_id, amount, date, flagged)
+- customer_profiles(customer_id, full_name*, email*, phone*, ssn*, date_of_birth*,
+  street_address*, city, state, credit_band, signup_channel)
+Columns marked * are restricted personal data. They can't be read, filtered on, joined on
+or copied, so name specific columns instead of SELECT * on those tables.
 
-Use query_data to read data (single SELECT statements only).
-Use delete_records only if the user explicitly asks to delete data. It takes a table
-name and a dictionary of column/value filters, for example {"id": 1}.
+Tools:
+- query_data: one read-only SELECT per call. Joins, CTEs, window functions and
+  subqueries all work.
+- write_table: one CREATE TABLE / CREATE TEMP TABLE / INSERT per call, into the analyst's
+  own workspace (never the source tables). Use CREATE TEMP TABLE for scratch work that
+  later queries in this session can reuse. Personal data can't be written.
+- delete_records: takes a table name and a dictionary of column/value filters, for example
+  {"id": 1}. It never deletes anything immediately: it files a request for human approval
+  and returns a preview. When it returns status "pending_approval", tell the user the
+  request id, summarize the preview (rows matched, dependent rows, whether foreign keys
+  would block it), and say that a human must approve it.
 
-delete_records never deletes anything immediately. It files a request for human
-approval and returns a preview of what would be affected. When it returns status
-"pending_approval", tell the user the request id, summarize the preview (rows
-matched, dependent rows, and whether foreign keys would block it), and say that a
-human must approve it. If a tool returns an error, report it plainly and stop.
-Do not try to work around any refusal with a different tool or a rephrased query.
+UPDATE, DELETE, DROP, ALTER and TRUNCATE are not available in SQL. If a tool returns an
+error or a refusal, explain it to the user plainly, suggest the allowed alternative it
+names, and stop. Do not try to work around a refusal with a different tool or a
+rephrased query.
 """
 
 
@@ -61,7 +71,8 @@ Do not try to work around any refusal with a different tool or a rephrased query
 
 @tool("query_data")
 def query_data_tool(sql: str) -> dict:
-    """Run a read-only SQL SELECT query against the database and return the rows."""
+    """Run one read-only SQL SELECT (joins, CTEs, window functions, subqueries) and return
+    the rows. Restricted personal-data columns are refused wherever they appear."""
     return query_data(sql)
 
 
@@ -73,7 +84,15 @@ def delete_records_tool(table: str, filters: dict) -> dict:
     return delete_records(table, filters)
 
 
-TOOLS = [query_data_tool, delete_records_tool]
+@tool("write_table")
+def write_table_tool(sql: str) -> dict:
+    """Run one CREATE TABLE, CREATE TEMP TABLE or INSERT INTO statement in the analyst's own
+    workspace. Source tables are read-only; existing data can't be updated, replaced or
+    dropped; statements that would store personal data are rolled back."""
+    return write_table(sql)
+
+
+TOOLS = [query_data_tool, write_table_tool, delete_records_tool]
 
 
 # --- Graph -------------------------------------------------------------------
