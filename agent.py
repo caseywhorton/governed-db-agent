@@ -24,6 +24,7 @@ from langfuse.langchain import CallbackHandler  # noqa: E402
 from langgraph.graph import START, MessagesState, StateGraph  # noqa: E402
 from langgraph.prebuilt import ToolNode, tools_condition  # noqa: E402
 
+from database_context import build_context  # noqa: E402
 from permissions import set_source  # noqa: E402
 from tools import delete_records, query_data, write_table  # noqa: E402
 
@@ -34,16 +35,9 @@ set_source("langgraph")  # tag audit entries from this process
 PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
 DEFAULT_MODELS = {"anthropic": "claude-sonnet-5-5", "openai": "gpt-4.1"}
 
-SYSTEM_PROMPT = """You are a data-analyst assistant for a small SQLite database.
+_PROMPT_TEMPLATE = """You are a data-analyst assistant for a small SQLite database.
 
-Tables (source data, read-only):
-- customers(id, name*, segment, created_at)
-- accounts(id, customer_id, account_type, balance)
-- transactions(id, account_id, amount, date, flagged)
-- customer_profiles(customer_id, full_name*, email*, phone*, ssn*, date_of_birth*,
-  street_address*, city, state, credit_band, signup_channel)
-Columns marked * are restricted personal data. They can't be read, filtered on, joined on
-or copied, so name specific columns instead of SELECT * on those tables.
+__CONTEXT__
 
 Tools:
 - query_data: one read-only SELECT per call. Joins, CTEs, window functions and
@@ -62,6 +56,9 @@ error or a refusal, explain it to the user plainly, suggest the allowed alternat
 names, and stop. Do not try to work around a refusal with a different tool or a
 rephrased query.
 """
+
+# Built from the live schema, the policy, and database_context.md each time the agent starts.
+SYSTEM_PROMPT = _PROMPT_TEMPLATE.replace("__CONTEXT__", build_context())
 
 
 # --- LangChain tool wrappers -------------------------------------------------

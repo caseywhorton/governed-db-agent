@@ -23,6 +23,7 @@ from fastmcp import FastMCP  # noqa: E402
 from langfuse import get_client  # noqa: E402
 
 import tools as governed  # noqa: E402
+from database_context import build_context  # noqa: E402
 from permissions import set_source  # noqa: E402
 
 set_source("mcp")  # tag audit entries from this process
@@ -30,19 +31,20 @@ set_source("mcp")  # tag audit entries from this process
 mcp = FastMCP("governed-db")
 
 
-@mcp.tool()
-def query_data(sql: str) -> dict:
-    """Run one read-only SQL SELECT (joins, CTEs, window functions, subqueries).
+QUERY_DATA_DESCRIPTION = (
+    "Run one read-only SQL SELECT (joins, CTEs, window functions, subqueries). "
+    "Results are capped at 100 rows.\n\n" + build_context()
+)
 
-    Source tables: customers(id, name*, segment, created_at),
-    accounts(id, customer_id, account_type, balance),
-    transactions(id, account_id, amount, date, flagged),
-    customer_profiles(customer_id, full_name*, email*, phone*, ssn*, date_of_birth*,
-    street_address*, city, state, credit_band, signup_channel).
-    Columns marked * are restricted personal data: they can't be read, filtered on,
-    joined on or copied, so name specific columns instead of using SELECT * on those tables.
-    """
+
+def query_data(sql: str) -> dict:
     return governed.query_data(sql)
+
+
+# The model reads the tool's description, so it is built from database_context.md and the
+# live schema when the server starts. Editing the notes file needs a server restart.
+query_data.__doc__ = QUERY_DATA_DESCRIPTION
+mcp.tool()(query_data)
 
 
 @mcp.tool()
