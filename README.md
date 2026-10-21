@@ -1,6 +1,6 @@
 # Governed Database Assistant
 
-An LLM agent with database access, wrapped in the governance controls that agent systems need before they can be trusted: tiered permissions, human approval for destructive actions, and a full audit trail.
+An LLM agent with database access, wrapped in the governance controls that agent systems need before they can be trusted: tiered permissions, human approval for destructive actions, column-level protection of personal data, and a full audit trail.
 
 The agent itself is deliberately simple. The governance layer around it is the point of the project.
 
@@ -10,6 +10,7 @@ Giving an agent database access is easy. Giving it access safely is the hard par
 
 - Classify every tool by **risk level** (read, transform, destroy)
 - Enforce limits **in code**, not in a prompt the model could ignore
+- Restrict personal-data columns **in the database engine**, so aliases, CTEs, and `SELECT *` cannot hide them
 - Require **human approval** before anything irreversible runs
 - Record **every attempt**, allowed or denied, in an audit trail
 
@@ -19,8 +20,13 @@ The same governed tools are reachable from two different clients, a LangGraph ag
 
 | Component | Status |
 |---|---|
-| SQLite database with related tables | Done |
-| `query_data` tool (read-only, two-layer enforcement) | Done |
+| SQLite source database with related tables | Done |
+| `query_data` tool (read-only SELECT, authorizer-enforced) | Done |
+| Restricted personal-data columns (`policy.py`) | Done |
+| Result masking for values that look like personal data | Done |
+| `write_table` (MEDIUM: CREATE/INSERT into an analyst workspace) | Done |
+| Governed SQLite session (`sql_session.py`) | Done |
+| Guardrail tests (`test_guardrails.py`) | Done |
 | Permission decorator with risk tiers | Done |
 | JSONL audit log | Done |
 | Langfuse tracing of tool calls | Done |
@@ -40,19 +46,41 @@ The same governed tools are reachable from two different clients, a LangGraph ag
 | Tier | Meaning | Example tool | Autonomy |
 |---|---|---|---|
 | LOW | Read-only | `query_data` | Runs without approval |
-| MEDIUM | Transforms data, reversible | *(planned)* dbt run | Runs without approval |
+| MEDIUM | Transforms data, reversible | `write_table` | Runs without approval |
 | HIGH | Destructive, irreversible | `delete_records` | Never runs autonomously; files an approval request |
 
-A single setting, `MAX_AUTONOMOUS_RISK`, controls the highest tier the agent may run on its own. Anything above it is intercepted by the approval gate.
+A single setting, `MAX_AUTONOMOUS_RISK`, controls the highest tier the agent may run on its own. It is currently `MEDIUM`, so reads and workspace writes run immediately. Anything above that is intercepted by the approval gate.
 
 ### Two layers of enforcement
 
-Safety does not depend on any single check. For example, `query_data` is protected twice:
+Safety does not depend on any single check, and it does not depend on parsing the SQL text for table and column names.
 
-1. **Application layer:** the function accepts only a single `SELECT` statement.
-2. **Database layer:** the connection is opened read-only, so SQLite itself refuses writes even if the first check were bypassed.
+**Reads (`query_data`).** The source database is attached read-only. SQLite's authorizer callback runs while the statement compiles, with the real table and column the engine is about to touch. Restricted personal-data columns are denied wherever they appear: `SELECT *`, aliases, CTEs, subqueries, `UNION`, filters, `ORDER BY`, and joins. After a query succeeds, values that look like an SSN, email, phone number, or card number are masked in the result set.
 
-Deletes follow the same principle. The application validates the request and the approval gate requires a human, and the database still enforces foreign keys (`PRAGMA foreign_keys = ON` on the write connection), so a delete that would orphan rows fails at the database level even if it is approved.
+**Writes (`write_table`).** Source tables cannot be changed. New tables land in a separate analyst workspace (`analyst_workspace.db`) or in temp (session scratch). Only `CREATE TABLE`, `CREATE TEMP TABLE`, and `INSERT` are allowed; `UPDATE`, `DELETE`, `DROP`, `ALTER`, `INSERT OR REPLACE`, and `ON CONFLICT ... DO UPDATE` are refused. Each write runs in a transaction. If the written rows contain personal data, the whole statement is rolled back.
+
+**Deletes.** The application validates the request (table allow-list, required filters, no restricted columns as filters, bound parameters) and the approval gate requires a human. The database still enforces foreign keys (`PRAGMA foreign_keys = ON` on the write connection), so a delete that would orphan rows fails at the database level even if it is approved.
+
+A few constructs are not reported to the authorizer, so they are refused by a text check with strings and comments blanked out: `NATURAL JOIN` and `JOIN ... USING` (they can compare restricted columns without a reported read), plus `VACUUM`, `REINDEX`, and `ANALYZE`. `ON` join conditions are reported normally and stay allowed.
+
+Joins, CTEs (including recursive), window functions, and subqueries all work, as long as they never touch a restricted column.
+
+### Personal data
+
+What counts as personal data lives in `policy.py` and is enforced in two independent ways:
+
+1. **Restricted columns.** A fixed list that can never be read, filtered on, joined on, or copied:
+
+   | Table | Restricted columns |
+   |---|---|
+   | `customers` | `name` |
+   | `customer_profiles` | `full_name`, `email`, `phone`, `ssn`, `date_of_birth`, `street_address` |
+
+   Everything else on those tables (`segment`, `city`, `state`, `credit_band`, …) is readable. `accounts` and `transactions` have no restricted columns.
+
+2. **Pattern detectors.** SSN, email, phone, and Luhn-valid card numbers, used to scan rows written to the workspace and to mask query results. This is a second line of defence for values the column list does not cover.
+
+All sample personal data is fake: emails use `example.com`, phones use the 555-01xx range, and SSNs use never-issued 9xx area numbers.
 
 ### Approval workflow for destructive actions
 
@@ -73,8 +101,8 @@ An agent can ask for a delete but can never perform one. The flow:
 Design choices behind this:
 
 - **Structured filters, not raw SQL.** The model supplies a table and column/value filters, never a WHERE clause. Table and column names are validated against the schema, and values are bound as parameters.
-- **Blast-radius controls.** A table allow-list, at least one required filter (no wiping a table), and a 100-row cap per request.
-- **The preview shows foreign-key impact.** For a customer with accounts, it reports the dependent rows and flags the delete as blocked, and the database refuses it if approved anyway.
+- **Blast-radius controls.** A table allow-list (`customers`, `accounts`, `transactions`), at least one required filter (no wiping a table), and a 100-row cap per request. Restricted columns cannot be used as filters.
+- **The preview shows foreign-key impact.** For a customer with accounts, it reports the dependent rows and flags the delete as blocked, and the database refuses it if approved anyway. Restricted columns are omitted from sample rows.
 - **Separation of duties.** The approval tool is a separate process the agent cannot call, so an agent cannot approve its own request.
 - **Each request is claimed atomically**, so it can only ever be executed once.
 - **One mechanism for both clients.** Because approval happens out of band, it protects the LangGraph agent and Cursor identically. A graph-level pause would only have covered one of them.
@@ -89,7 +117,7 @@ Design choices behind this:
 | | LangGraph agent (`agent.py`) | Cursor via MCP (`mcp_server.py`) |
 |---|---|---|
 | Who chooses the tool calls | The configured LLM (Anthropic or OpenAI) | Cursor's own model |
-| System prompt | Yes: describes the schema and how to report pending requests | No |
+| System prompt | Yes: describes the schema, restricted columns, and how to report pending requests | No (tool descriptions carry the same facts) |
 | Extra approval prompt | No | Cursor may ask before each tool call |
 | LLM-level traces (model, tokens) | Yes | No, the model runs inside Cursor |
 | Permission checks, audit log, tool traces | Yes | Yes |
@@ -139,7 +167,6 @@ For the LangGraph agent, the same traces also capture the model used, token coun
   <em>A HIGH-risk <code>delete_records</code> Langfuse Agent call flagged at WARNING level. It was not executed.</em>
 </p>
 
-
 <p align="center">
   <img src="img/delete_request_mcp_langfuse.jpg" alt="High-risk delete flagged from MCP tool call in Langfuse" width="600"><br>
   <em>A HIGH-risk <code>delete_records</code> MCP tool call flagged at WARNING level. It was not executed.</em>
@@ -147,13 +174,23 @@ For the LangGraph agent, the same traces also capture the model used, token coun
 
 ## Database schema
 
-Three related tables with foreign keys, enough structure for meaningful joins and meaningful cascade risk:
+Four related tables. The original three keep their ids; `setup_db.py` adds generated customers, profiles, accounts, and transactions from a fixed seed (40 customers, hundreds of transactions). It is safe to run repeatedly: inserts use fixed ids with `INSERT OR IGNORE`.
 
-- `customers` (id, name, segment, created_at)
-- `accounts` (id, customer_id, account_type, balance)
-- `transactions` (id, account_id, amount, date, flagged)
+| Table | Columns | Notes |
+|---|---|---|
+| `customers` | id, name*, segment, created_at | |
+| `accounts` | id, customer_id, account_type, balance | FK → customers |
+| `transactions` | id, account_id, amount, date, flagged | FK → accounts |
+| `customer_profiles` | customer_id, full_name*, email*, phone*, ssn*, date_of_birth*, street_address*, city, state, credit_band, signup_channel | FK → customers |
 
-All data is synthetic. Approval requests are stored separately, in `approvals.db`, so the agent's query tool can never read or modify them.
+Columns marked `*` are restricted personal data. All values are synthetic.
+
+Two SQLite files:
+
+- `governed_agent.db` — source data, attached read-only inside the analyst session
+- `analyst_workspace.db` — the analyst's own tables; temp tables live only for the process
+
+Approval requests are stored separately, in `approvals.db`, so the agent's query tool can never read or modify them.
 
 ## Setup
 
@@ -162,6 +199,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install langgraph langchain-anthropic langfuse python-dotenv fastmcp
 pip install langchain-openai   # only if you want to use OpenAI models
 python setup_db.py             # creates governed_agent.db with sample data (also restores deleted sample rows)
+python -m unittest test_guardrails -v   # optional: authorizer, PII, and write-path checks
 python tools.py                # runs manual checks; the last one files a pending approval request
 cat audit_log.jsonl            # inspect the audit trail
 ```
@@ -180,7 +218,7 @@ OPENAI_API_KEY=sk-...                      # needed when LLM_PROVIDER=openai
 # LLM_MODEL=...                            # optional; overrides the default model
 ```
 
-`.env`, `approvals.db`, `audit_log.jsonl`, and `governed_agent.db` are listed in `.gitignore` and should not be committed. If you switch `LLM_PROVIDER`, change or remove `LLM_MODEL` at the same time, since a model name from one provider will not work with the other.
+`.env`, `approvals.db`, `audit_log.jsonl`, `governed_agent.db`, and `analyst_workspace.db` are listed in `.gitignore` and should not be committed. If you switch `LLM_PROVIDER`, change or remove `LLM_MODEL` at the same time, since a model name from one provider will not work with the other.
 
 ### Run the LangGraph agent
 
@@ -206,7 +244,7 @@ Open this project as the **top-level folder** in Cursor. The project-level confi
 }
 ```
 
-Then enable `governed-db` in Cursor's MCP settings. Two tools should appear: `query_data` and `delete_records`. Cursor's agent can request a delete, but approval still happens in the terminal with `approvals.py`. The server communicates over stdout, so avoid `print()` in code it imports. If you change a tool's signature, toggle the server off and on in MCP settings to reload it.
+Then enable `governed-db` in Cursor's MCP settings. Three tools should appear: `query_data`, `write_table`, and `delete_records`. Cursor's agent can request a delete, but approval still happens in the terminal with `approvals.py`. The server communicates over stdout, so avoid `print()` in code it imports. If you change a tool's signature, toggle the server off and on in MCP settings to reload it.
 
 <p align="center">
   <img src="img/cursor_delete_attempt.jpg" alt="Cursor requesting a delete through the governed MCP tool" width="600"><br>
@@ -217,12 +255,15 @@ Then enable `governed-db` in Cursor's MCP settings. Two tools should appear: `qu
 
 ```
 setup_db.py         # creates the SQLite database and sample data
-tools.py            # governed tools: query_data, delete_records, and the dry-run preview
+tools.py            # governed tools: query_data, write_table, delete_records
+sql_session.py      # authorizer-enforced SQLite session (source vs workspace)
+policy.py           # restricted columns and personal-data pattern detectors
 permissions.py      # risk tiers, permission decorator, approval gate, audit log, Langfuse spans
 approval_store.py   # SQLite-backed queue of approval requests
 approvals.py        # human CLI to list, review, approve, or deny requests
 agent.py            # LangGraph agent (Anthropic or OpenAI) using the governed tools
 mcp_server.py       # MCP server exposing the same tools to Cursor
+test_guardrails.py  # tests for restricted columns, writes, and hostile SQL
 langfuse_check.py   # smoke test for Langfuse credentials and tracing
 .cursor/mcp.json    # Cursor config for the MCP server
 img/                # screenshots used in this README
@@ -231,7 +272,7 @@ img/                # screenshots used in this README
 
 ## Known limitations
 
-- **The audit log and Langfuse traces store raw queries and arguments; production use would require redaction and access controls.** They can contain sensitive values (identifiers, personal data), and recording them verbatim copies that data into additional, less protected locations: a local file and a third-party observability service. Here the data is synthetic, so this is acceptable for a demo, but a real deployment would mask values before logging, restrict access to both stores, and define retention rules.
+- **The audit log and Langfuse traces store raw queries and arguments; production use would require redaction and access controls.** They can contain sensitive values (identifiers, personal data), and recording them verbatim copies that data into additional, less protected locations: a local file and a third-party observability service. Query results are masked, but the SQL text of a blocked attempt can still name a restricted column. Here the data is synthetic, so this is acceptable for a demo, but a real deployment would mask values before logging, restrict access to both stores, and define retention rules.
 - **The permission layer governs calls that go through the tools, not everything a client can do.** An agent with terminal access, such as Cursor's, could in principle run `sqlite3` against the database file directly and bypass these controls. A real deployment would close that gap with database-level credentials, so the governed path is the agent's only route to the data. This has not been tested here; it is a design boundary.
 
 <p align="center">
@@ -241,16 +282,16 @@ img/                # screenshots used in this README
 - **Approver identity is the local OS username, and the approval tool is only separate by convention.** An agent with terminal access could run `approvals.py` itself and type `approve`. Real separation of duties needs an approver identity the agent cannot use, such as authenticated reviewers in a separate service.
 - **`approvals.db` has no integrity protection.** Anyone with write access to the file can alter requests. Approving always re-runs the preview on the stored arguments, so the reviewer sees what will execute, but a production system would sign requests and store them in a controlled service.
 - **Approval is minimal.** There is a single approver, no expiry on pending requests, and no escalation or quorum rules.
-- **Deletes are narrow by design.** Filters support equality only, and there is no cascade option: deleting a row that other rows reference is blocked by foreign keys rather than propagated.
+- **Deletes are narrow by design.** Filters support equality only, `customer_profiles` is not on the delete allow-list, and there is no cascade option: deleting a row that other rows reference is blocked by foreign keys rather than propagated.
+- **Pattern detectors are not a complete privacy control.** They catch common SSN, email, phone, and card shapes. They will miss other identifiers, and they can false-positive on numbers that look like cards.
+- **A few SQL constructs are refused by a text check**, because SQLite does not report them to the authorizer (`NATURAL JOIN`, `JOIN ... USING`, and a handful of maintenance statements). That check blanks string literals and comments first, but it is not a full SQL parser.
 - **Third-party MCP servers run outside these controls.** Only tools wrapped with `@requires_permission` get risk tiers, approval gating, audit logging, and tracing.
 - Cursor's model runs inside Cursor, so calls made through the MCP server have tool-level traces but no model or token details. Cursor's own approval prompts are a separate layer from this project's.
-- SELECT validation is a simple prefix check backed by a read-only connection. It is not a full SQL parser, which is why the database-level layer matters.
 - The autonomy policy is a single global setting. A real system would scope permissions per user, per agent, and per environment.
 
 ## Roadmap
 
-1. Redact sensitive values before logging
+1. Redact sensitive values in the audit log and traces, not only in query results
 2. Explore database-level credentials so the governed tools are the only route to the data
 3. Authenticated approvers and request expiry
-4. A MEDIUM-risk tool (for example, triggering a dbt run) to exercise the middle tier
-5. Optional: FastAPI wrapper, Docker, GitHub Actions deployment
+4. Optional: FastAPI wrapper, Docker, GitHub Actions deployment
