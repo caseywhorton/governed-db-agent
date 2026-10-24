@@ -2,7 +2,9 @@
 
 An LLM agent with database access, wrapped in the governance controls that agent systems need before they can be trusted: tiered permissions, human approval for destructive actions, column-level protection of personal data, and a full audit trail.
 
-The agent itself is deliberately simple. The governance layer around it is the point of the project.
+The agent itself is deliberately simple. 
+
+The governance layer around it is the point of the project.
 
 ## Why this exists
 
