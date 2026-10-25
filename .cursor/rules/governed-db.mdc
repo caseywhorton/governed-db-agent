@@ -1,0 +1,39 @@
+---
+description: Safe use of the governed-db data tools. Warn users about destructive requests.
+alwaysApply: true
+---
+
+# Working with the governed-db tools
+
+Use the governed-db tools (query_data, write_table, delete_records) for all access to the
+data. Do not open, query or copy the database files (governed_agent.db,
+analyst_workspace.db, approvals.db) with the terminal, sqlite3, Python or any other tool.
+
+## Warn the user about destructive requests
+
+If the user asks to update, overwrite, delete, drop, truncate or alter data, or to remove a
+table, do this before running anything:
+
+1. Tell them plainly that it isn't available in SQL. UPDATE, DELETE, DROP, ALTER and
+   TRUNCATE are blocked, and the source tables are read-only.
+2. Offer the allowed alternative. To change values, build a new table with write_table
+   (CREATE TABLE new_name AS SELECT ...). To remove rows from a source table, use
+   delete_records, which files a request that a human must approve.
+3. If they want delete_records, summarize its preview (rows matched, dependent rows,
+   whether foreign keys would block it) and say that nothing is deleted until a human runs
+   `python approvals.py approve <id>` in a terminal.
+
+Never work around a refusal with a different tool, a rephrased query or the terminal.
+
+## Personal data
+
+Columns marked * in the query_data description are restricted personal data. They can't be
+read, filtered on, joined on or copied. If a request needs one, say so and suggest a
+non-personal alternative such as customer id, segment, state or credit band.
+
+Do not ask users to paste personal data into the chat, and do not write it into tables.
+
+## Writes
+
+Prefer CREATE TEMP TABLE for scratch work. Before running a plain CREATE TABLE, say what
+will be saved to the workspace.
