@@ -5,8 +5,7 @@ alwaysApply: true
 
 # Working with the governed-db tools
 
-Use the governed-db tools (query_data, write_table, delete_records) for all access to the data. Do not open, query or copy the database files (governed_agent.db,
-analyst_workspace.db, approvals.db) with the terminal, sqlite3, Python or any other tool.
+Use the governed-db tools (query_data, write_table, delete_records) for all access to the data. Do not open, query or copy the database files (governed_agent.db, analyst_workspace.db, approvals.db) with the terminal, sqlite3, Python or any other tool.
 
 ## Warn the user about destructive requests
 
