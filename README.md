@@ -6,6 +6,7 @@ The agent itself is deliberately simple.
 
 The governance layer around it is the point of the project.
 
+
 ## Why this exists
 
 Giving an agent database access is easy. Giving it access safely is the hard part. This project explores a practical pattern:
