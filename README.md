@@ -48,7 +48,7 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | Human-in-the-loop approval gate (`approvals.py`) | Done |
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | Build guide (`BUILD_GUIDE.md`) | Done |
-| GitHub Actions workflow to run the tests | Planned |
+| GitHub Actions workflow to run the tests | Done |
 | FastAPI wrapper, Docker, deployment | Planned (stretch) |
 
 ## How it works
