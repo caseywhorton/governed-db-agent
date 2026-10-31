@@ -1,0 +1,43 @@
+# Save this file as .github/workflows/tests.yml in your repository.
+#
+# GitHub runs it automatically. It uses no secrets: the tests need no API keys and no model.
+
+name: tests
+
+# When to run: on every push to main, and on every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the workflow only needs to read the code.
+permissions:
+  contents: read
+
+jobs:
+  guardrail-tests:
+    # A fresh, temporary Linux machine, thrown away when the job ends.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Belt and braces: make sure the tests never try to send traces to Langfuse.
+    env:
+      LANGFUSE_TRACING_ENABLED: "false"
+
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # The tests import permissions.py, which needs these two packages.
+      # They do not need langgraph, fastmcp, or any LLM library.
+      - name: Install dependencies
+        run: pip install langfuse python-dotenv
+
+      # Any failing test makes this step exit with an error, and the whole run turns red.
+      - name: Run the guardrail tests
+        run: python -m unittest test_guardrails -v
