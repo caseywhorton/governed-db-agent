@@ -1,6 +1,6 @@
 # Governed Database Assistant
 
-   ![tests](https://github.com/<your-username>/governed-db-agent/actions/workflows/tests.yml/badge.svg)
+   ![tests](https://github.com/caseywhorton/governed-db-agent/actions/workflows/tests.yml/badge.svg)
 
 An LLM agent with database access, wrapped in the governance controls that agent systems need before they can be trusted: tiered permissions, human approval for destructive actions, column-level protection of personal data, and a full audit trail.
 
