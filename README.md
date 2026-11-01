@@ -1,6 +1,6 @@
 # Governed Database Assistant
 
-   ![tests](https://github.com/caseywhorton/governed-db-agent/actions/workflows/tests.yml/badge.svg)
+[![tests](https://github.com/caseywhorton/governed-db-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/caseywhorton/governed-db-agent/actions/workflows/tests.yml)
 
 An LLM agent with database access, wrapped in the governance controls that agent systems need before they can be trusted: tiered permissions, human approval for destructive actions, column-level protection of personal data, and a full audit trail.
 
@@ -49,7 +49,10 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | Build guide (`BUILD_GUIDE.md`) | Done |
 | GitHub Actions workflow to run the tests | Done |
-| FastAPI wrapper, Docker, deployment | Planned (stretch) |
+| Docker and docker-compose | Planned |
+| Postgres with role-based access (replaces SQLite) | Planned |
+| FastAPI chat service with authentication | Planned |
+| Deployment | Planned (optional) |
 
 ## How it works
 
@@ -313,6 +316,8 @@ The unit tests need no model and no Cursor. They run against a throwaway copy of
 - long sessions: the same rules hold after hundreds of mixed allowed and refused statements
 - the delete path, the personal-data detectors, the model's context, and the audit trail
 
+The same tests run automatically in GitHub Actions on every push and pull request (`.github/workflows/tests.yml`), on a fresh machine with no secrets, so a change that weakens a guardrail turns the run red.
+
 ### What attacking my own design found
 
 One of the adversarial tests found a real hole. The first version allowed `JOIN ... USING` and `NATURAL JOIN`. SQLite builds those equality conditions internally, so the authorizer never saw a restricted column being compared. An analyst could write a table of guessed names (names have no detectable pattern, so the write was allowed) and run `JOIN guesses USING (full_name)` to learn which guesses exist and which customer they belong to. Those two join forms are now refused with a message pointing to `ON`, and the attack is a permanent regression test.
@@ -337,6 +342,7 @@ langfuse_check.py      # smoke test for Langfuse credentials and tracing
 BUILD_GUIDE.md         # step-by-step guide to building the project
 .cursor/mcp.json       # Cursor config for the MCP server
 .cursor/rules/         # Cursor rule that warns users about destructive requests
+.github/workflows/     # GitHub Actions workflow that runs the tests
 img/                   # screenshots used in this README
 .env                   # local credentials (not committed)
 ```
@@ -366,10 +372,19 @@ img/                   # screenshots used in this README
 
 ## Roadmap
 
-1. Run the tests on every push with a GitHub Actions workflow
-2. Redact sensitive values in the audit log and traces, not only in query results
-3. Suppress or flag results built from very small groups
-4. Move to database-level permissions so the governed tools are the only route to the data
-5. Authenticated approvers and request expiry
-6. Per-user sessions
-7. Optional: FastAPI wrapper, Docker, deployment
+The system works end to end on SQLite. The next stages move it onto infrastructure where the platform enforces the controls instead of the application simulating them, in this order:
+
+| # | Stage | What gets built | Limitations it addresses |
+|---|---|---|---|
+| 1 | **Containers** | A Dockerfile and `.dockerignore` (so `.env` and the databases never enter an image), and a `docker-compose.yml` running the app next to Postgres | Setup problems that only appear on one machine |
+| 2 | **Postgres** | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
+| 3 | **Service** | A FastAPI service with `/chat` and approval endpoints, authentication, per-user chat history and sessions, and request expiry | Shared session and self-declared `source`; minimal approval |
+| 4 | **Data protection** | Mask personal data in the audit log and Langfuse, and suppress or flag results built from very small groups | Raw queries in logs; small-group re-identification |
+| 5 | **Deployment** (optional) | A managed host with Postgres, secrets management, TLS, and a deploy step in CI. Never public without authentication | |
+
+### Design notes for the next stages
+
+- **Postgres replaces SQLite instead of running beside it.** Keeping both would double the code and the tests.
+- **Postgres enforces permissions, not content.** The personal-data scan on writes, result masking, prompt guidance, and small-group suppression stay in application code.
+- **The tests are the specification.** The hostile-SQL suite should pass against Postgres. Where the database now enforces a rule that a text check used to (for example the `USING` join check), keep the test as proof and remove the text check only once it passes.
+- **The approval flow keeps its shape.** Only the storage and the identity behind the approver change: a database role the agent cannot use, in place of the local OS username.
