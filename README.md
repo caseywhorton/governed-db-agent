@@ -385,6 +385,9 @@ The system works end to end on SQLite. The next stages move it onto infrastructu
 ### Design notes for the next stages
 
 - **Postgres replaces SQLite instead of running beside it.** Keeping both would double the code and the tests.
+
 - **Postgres enforces permissions, not content.** The personal-data scan on writes, result masking, prompt guidance, and small-group suppression stay in application code.
+
 - **The tests are the specification.** The hostile-SQL suite should pass against Postgres. Where the database now enforces a rule that a text check used to (for example the `USING` join check), keep the test as proof and remove the text check only once it passes.
+
 - **The approval flow keeps its shape.** Only the storage and the identity behind the approver change: a database role the agent cannot use, in place of the local OS username.
