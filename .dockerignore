@@ -1,0 +1,7 @@
+.env
+venv/
+__pycache__/
+*.db
+audit_log.jsonl
+.git
+CAREER_BUILD.md
