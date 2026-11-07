@@ -326,6 +326,7 @@ python phase12_check.py                 # 11 end-to-end checks, traced in Langfu
 The unit tests need no model and no Cursor. They run against a throwaway copy of the database in a temporary folder, so real data, the audit log, and the approval queue are never touched. They cover:
 
 - realistic analyst queries (joins, CTEs, window functions, recursive CTEs, correlated subqueries)
+
 - about twenty ways of reading a restricted column, all refused
 - about twenty-five destructive or unsafe statements, refused by both tools
 - writes: workspace and temp tables, personal data rolled back, the row cap
