@@ -49,7 +49,8 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | Build guide (`BUILD_GUIDE.md`) | Done |
 | GitHub Actions workflow to run the tests | Done |
-| Docker and docker-compose | Planned |
+| Dockerfile (runs the tests in a container) | Done |
+| docker-compose with Postgres | Planned |
 | Postgres with role-based access (replaces SQLite) | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
