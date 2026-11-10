@@ -55,7 +55,6 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
-
 ## How it works
 
 ### Risk tiers
