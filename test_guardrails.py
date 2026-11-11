@@ -19,6 +19,11 @@ import unittest
 from pathlib import Path
 
 os.environ.setdefault("LANGFUSE_TRACING_ENABLED", "false")  # don't send test traces
+# Dummy keys. Tracing is off, so nothing is sent; they only stop Langfuse printing a
+# "client initialized without public_key" notice (in Docker and CI there is no .env).
+# Set before the imports below, so they also take priority over real keys in a local .env.
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+os.environ.setdefault("LANGFUSE_SECRET_KEY", "sk-lf-test")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import approval_store  # noqa: E402
