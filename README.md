@@ -23,6 +23,32 @@ The same governed tools are reachable from two different clients, a LangGraph ag
 
 For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_GUIDE.md`](BUILD_GUIDE.md).
 
+## Quickstart
+
+Five minutes, no API keys needed:
+
+```bash
+git clone https://github.com/caseywhorton/governed-db-agent.git
+cd governed-db-agent
+python3 -m venv venv && source venv/bin/activate
+pip install langgraph langchain-anthropic langfuse python-dotenv fastmcp
+python setup_db.py                       # creates the sample database (synthetic data)
+python -m unittest test_guardrails       # 47 guardrail tests, including hostile SQL
+python phase12_check.py                  # end-to-end checks against the real tools
+```
+
+If those pass, the governance layer works on your machine. To go further:
+
+| I want to... | Do this |
+|---|---|
+| Watch the agent work | Add Langfuse and LLM keys to `.env` ([Setup](#setup)), then `python agent.py` |
+| Approve or deny a delete | Run `python approvals.py` in a second terminal while a delete request is pending |
+| Use it from Cursor | Open the project as the top-level folder and enable `governed-db` ([Use the tools from Cursor](#use-the-tools-from-cursor)) |
+| Run the tests in a container | `docker build -t governed-db-agent . && docker run --rm governed-db-agent` |
+| Try the Postgres version | See [Run Postgres with Docker Compose](#run-postgres-with-docker-compose) and the note below |
+
+Everything in the data is synthetic, and `.env` is never committed.
+
 ## Status
 
 | Component | Status |
@@ -49,8 +75,12 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | Build guide (`BUILD_GUIDE.md`) | Done |
 | GitHub Actions workflow to run the tests | Done |
-| Docker and docker-compose | Planned |
-| Postgres with role-based access (replaces SQLite) | Planned |
+| Dockerfile (runs the tests in a container) | Done |
+| docker-compose with Postgres | Done |
+| Postgres schema and seed data (`export_postgres_seed.py`) with a health-check script (`postgres_check.sql`) | Done |
+| Postgres roles and column-level grants generated from `policy.py` (`generate_postgres_roles.py`), with a pass/fail verification script | Done |
+| Python access layer that connects as the analyst role (replaces SQLite) | Planned |
+| Per-user workspace schemas, approval queue in Postgres, `pgaudit` | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
@@ -271,6 +301,58 @@ python agent.py "Delete all flagged transactions"
 python approvals.py list   # the delete shows up here as a pending request
 ```
 
+### Run in Docker
+
+A `Dockerfile` builds a small image (`python:3.13-slim`, running as a non-root user) with the dependencies from `requirements.txt`. `.dockerignore` keeps `.env`, the databases, and the audit log out of the image, so no secret is ever baked in.
+
+```bash
+docker build -t governed-db-agent .
+
+docker run --rm governed-db-agent             # runs the guardrail tests (the image's default command)
+docker run --rm -it governed-db-agent bash    # opens a shell inside the container
+```
+
+Keys are never copied into the image. To give a container your keys, pass them at run time with `--env-file .env`, and keep the values in that file free of inline `#` comments, which Docker does not strip.
+
+Without keys, the container prints a Langfuse "client will be disabled" notice. That is expected: tracing is off, and the tests do not need it.
+
+### Run Postgres with Docker Compose
+
+`docker-compose.yml` starts Postgres 17 next to the app. Set `POSTGRES_PASSWORD` in `.env` first; the database is published on `127.0.0.1:5433` only.
+
+```bash
+docker compose up -d db
+python export_postgres_seed.py > postgres_seed.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_seed.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_check.sql
+```
+
+### Postgres roles generated from the policy
+
+`policy.py` stays the single source of truth. `generate_postgres_roles.py` turns it into two `NOLOGIN` roles, used through `SET ROLE`:
+
+- `governed_analyst` can `SELECT` every column except the restricted ones, and cannot write or delete.
+- `governed_approver` has the same reads plus `DELETE` on the tables in `DELETABLE_TABLES` (`customer_profiles` is deliberately excluded).
+
+```bash
+python generate_postgres_roles.py > postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -P pager=off < postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_roles_verify.sql
+```
+
+`postgres_roles_verify.sql` prints PASS or FAIL for 13 checks proving Postgres itself refuses restricted columns (including in `WHERE` clauses and `SELECT *`), writes by the analyst, and deletes on `customer_profiles`. ### Query Postgres through the governed tool (read path)
+
+The app connects as a dedicated login role, `governed_agent`, which is a member of `governed_analyst` and nothing else. Create it by passing a password when you load the roles:
+
+```bash
+python generate_postgres_roles.py > postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -P pager=off < postgres_roles.sql
+pip install "psycopg[binary]"
+python pg_check.py
+```
+
+Add `POSTGRES_AGENT_PASSWORD=...` (letters and digits only) and `POSTGRES_PORT=5433` to `.env`, then set `DB_BACKEND=postgres` to route `query_data` to Postgres. `pg_check.py` runs 21 hostile and normal queries and prints PASS or FAIL for each. In this mode `write_table` and `delete_records` return a clear "not ported yet" message instead of touching the old SQLite copy.
+
 ### Use the tools from Cursor
 
 Open this project as the **top-level folder** in Cursor. The project-level config at `.cursor/mcp.json` is only picked up when the project root is the folder you opened.
@@ -309,6 +391,7 @@ python phase12_check.py                 # 11 end-to-end checks, traced in Langfu
 The unit tests need no model and no Cursor. They run against a throwaway copy of the database in a temporary folder, so real data, the audit log, and the approval queue are never touched. They cover:
 
 - realistic analyst queries (joins, CTEs, window functions, recursive CTEs, correlated subqueries)
+
 - about twenty ways of reading a restricted column, all refused
 - about twenty-five destructive or unsafe statements, refused by both tools
 - writes: workspace and temp tables, personal data rolled back, the row cap
@@ -328,7 +411,7 @@ One of the adversarial tests found a real hole. The first version allowed `JOIN 
 setup_db.py            # creates the SQLite database and sample data
 tools.py               # governed tools: query_data, write_table, delete_records
 sql_session.py         # authorizer-enforced SQLite session (source vs workspace)
-policy.py              # restricted columns and personal-data pattern detectors
+policy.py              # restricted columns, Postgres role settings, personal-data pattern detectors
 permissions.py         # risk tiers, permission decorator, approval gate, audit log, Langfuse spans
 approval_store.py      # SQLite-backed queue of approval requests
 approvals.py           # human CLI to list, review, approve, or deny requests
@@ -339,6 +422,11 @@ mcp_server.py          # MCP server exposing the same tools to Cursor
 test_guardrails.py     # tests for restricted columns, writes, and hostile SQL
 phase12_check.py       # end-to-end checks run directly against the tools
 langfuse_check.py      # smoke test for Langfuse credentials and tracing
+docker-compose.yml     # Postgres 17 service (and the app) for local development
+export_postgres_seed.py  # exports the SQLite data as Postgres schema and seed SQL
+postgres_check.sql     # pass/fail health checks for the loaded Postgres data
+generate_postgres_roles.py  # builds roles and column-level grants from policy.py
+postgres_roles_verify.sql   # proves Postgres refuses what the policy forbids
 BUILD_GUIDE.md         # step-by-step guide to building the project
 .cursor/mcp.json       # Cursor config for the MCP server
 .cursor/rules/         # Cursor rule that warns users about destructive requests
@@ -376,8 +464,8 @@ The system works end to end on SQLite. The next stages move it onto infrastructu
 
 | # | Stage | What gets built | Limitations it addresses |
 |---|---|---|---|
-| 1 | **Containers** | A Dockerfile and `.dockerignore` (so `.env` and the databases never enter an image), and a `docker-compose.yml` running the app next to Postgres | Setup problems that only appear on one machine |
-| 2 | **Postgres** | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
+| 1 | **Containers** (done) | A Dockerfile and `.dockerignore` (so `.env` and the databases never enter an image), and a `docker-compose.yml` running the app next to Postgres | Setup problems that only appear on one machine |
+| 2 | **Postgres** (in progress: schema, seed data, roles and column-level grants done and verified; access layer next) | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
 | 3 | **Service** | A FastAPI service with `/chat` and approval endpoints, authentication, per-user chat history and sessions, and request expiry | Shared session and self-declared `source`; minimal approval |
 | 4 | **Data protection** | Mask personal data in the audit log and Langfuse, and suppress or flag results built from very small groups | Raw queries in logs; small-group re-identification |
 | 5 | **Deployment** (optional) | A managed host with Postgres, secrets management, TLS, and a deploy step in CI. Never public without authentication | |

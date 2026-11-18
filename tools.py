@@ -13,16 +13,28 @@ The SQL rules live in sql_session.py (enforced by the database engine's authoriz
 what counts as personal data lives in policy.py.
 """
 
+import os
 import sqlite3
 from pathlib import Path
 
 import policy
 from permissions import Risk, requires_permission
-from sql_session import run_sql
+
+# DB_BACKEND=postgres routes query_data through pg_session (the analyst login role).
+# Default stays sqlite. write_table and delete_records are not ported yet.
+_BACKEND = os.getenv("DB_BACKEND", "sqlite").strip().lower()
+if _BACKEND == "postgres":
+    from pg_session import run_sql
+else:
+    from sql_session import run_sql
 
 DB_PATH = Path("governed_agent.db")  # source data, used by the delete/approval path
 
 ALLOWED_TABLES = set(policy.DELETABLE_TABLES)  # tables delete_records may touch
+MSG_DELETE_NOT_PORTED = (
+    "delete_records is not available on the Postgres backend yet, so it will not touch the "
+    "old SQLite copy by accident."
+)
 MAX_DELETE_ROWS = 100  # blast-radius limit for a single delete request
 
 
@@ -154,6 +166,8 @@ def preview_delete(table: str, filters: dict) -> dict:
     not just by this function's logic. Restricted columns are left out of the
     sample rows.
     """
+    if _BACKEND == "postgres":
+        return {"ok": False, "error": MSG_DELETE_NOT_PORTED}
     try:
         conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     except sqlite3.Error as e:
@@ -204,6 +218,8 @@ def delete_records(table: str, filters: dict) -> dict:
     files an approval request instead. This body runs only when a human approves
     the request through approvals.py.
     """
+    if _BACKEND == "postgres":
+        return {"ok": False, "error": MSG_DELETE_NOT_PORTED}
     try:
         conn = sqlite3.connect(DB_PATH)
     except sqlite3.Error as e:

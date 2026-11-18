@@ -24,15 +24,27 @@ def _array(items):
 def generate() -> str:
     tables = sorted(set(policy.SENSITIVE_COLUMNS) | set(policy.DELETABLE_TABLES) | {"customer_profiles"})
     restricted = {t: sorted(policy.restricted_columns(t)) for t in tables}
-    a, p = policy.ANALYST_ROLE, policy.APPROVER_ROLE
+    a, p, l = policy.ANALYST_ROLE, policy.APPROVER_ROLE, policy.AGENT_LOGIN_ROLE
     out = [f"-- Generated from policy.py by generate_postgres_roles.py. Do not edit by hand.",
            "\\set ON_ERROR_STOP on", "",
            "DO $$ BEGIN",
            f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{a}') THEN CREATE ROLE {a} NOLOGIN; END IF;",
            f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{p}') THEN CREATE ROLE {p} NOLOGIN; END IF;",
            "END $$;", "",
+           "-- The login the app connects as. Needs a password: pass -v agent_password=...",
+           "\\if :{?agent_password}",
+           "\\else",
+           "  \\echo 'Missing password. Run psql with: -v agent_password=\"$POSTGRES_AGENT_PASSWORD\"'",
+           "  \\quit",
+           "\\endif",
+           f"SELECT 'CREATE ROLE {l} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'",
+           f" WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{l}') \\gexec",
+           f"SELECT format('ALTER ROLE {l} PASSWORD %L', :'agent_password') \\gexec",
+           f"GRANT {a} TO {l};",
+           f"ALTER ROLE {l} SET default_transaction_read_only = on;",
+           f"ALTER ROLE {l} SET statement_timeout = '5s';", "",
            f"-- Start from nothing, so re-running removes anything policy.py no longer allows.",
-           f"REVOKE ALL ON ALL TABLES IN SCHEMA {SCHEMA} FROM {a}, {p};",
+           f"REVOKE ALL ON ALL TABLES IN SCHEMA {SCHEMA} FROM {a}, {p}, {l};",
            f"GRANT USAGE ON SCHEMA {SCHEMA} TO {a}, {p};",
            f"ALTER ROLE {a} SET statement_timeout = '5s';",
            f"ALTER ROLE {p} SET statement_timeout = '5s';", "",

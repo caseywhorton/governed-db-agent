@@ -34,6 +34,7 @@ SENSITIVE_COLUMNS: dict[str, set[str]] = {
 ANALYST_ROLE = "governed_analyst"    # agent/analysts: reads allowed columns only
 APPROVER_ROLE = "governed_approver"  # approval tool: same reads, plus DELETE below
 DELETABLE_TABLES = ("customers", "accounts", "transactions")  # customer_profiles deliberately absent
+AGENT_LOGIN_ROLE = "governed_agent"  # the login the app connects as; a member of ANALYST_ROLE only
 
 
 def is_restricted(table: str, column: str) -> bool:

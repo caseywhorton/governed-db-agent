@@ -6,8 +6,21 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'governed_approver') THEN CREATE ROLE governed_approver NOLOGIN; END IF;
 END $$;
 
+-- The login the app connects as. Needs a password: pass -v agent_password=...
+\if :{?agent_password}
+\else
+  \echo 'Missing password. Run psql with: -v agent_password="$POSTGRES_AGENT_PASSWORD"'
+  \quit
+\endif
+SELECT 'CREATE ROLE governed_agent LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'governed_agent') \gexec
+SELECT format('ALTER ROLE governed_agent PASSWORD %L', :'agent_password') \gexec
+GRANT governed_analyst TO governed_agent;
+ALTER ROLE governed_agent SET default_transaction_read_only = on;
+ALTER ROLE governed_agent SET statement_timeout = '5s';
+
 -- Start from nothing, so re-running removes anything policy.py no longer allows.
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM governed_analyst, governed_approver;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM governed_analyst, governed_approver, governed_agent;
 GRANT USAGE ON SCHEMA public TO governed_analyst, governed_approver;
 ALTER ROLE governed_analyst SET statement_timeout = '5s';
 ALTER ROLE governed_approver SET statement_timeout = '5s';
