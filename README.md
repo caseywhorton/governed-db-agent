@@ -351,7 +351,7 @@ pip install "psycopg[binary]"
 python pg_check.py
 ```
 
-Add `POSTGRES_AGENT_PASSWORD=...` (letters and digits only) and `POSTGRES_PORT=5433` to `.env`, then set `DB_BACKEND=postgres` to route `query_data` to Postgres. `pg_check.py` runs 21 hostile and normal queries and prints PASS or FAIL for each. In this mode `write_table` and `delete_records` return a clear "not ported yet" message instead of touching the old SQLite copy.
+Add `POSTGRES_AGENT_PASSWORD=...` (letters and digits only) and `POSTGRES_PORT=5433` to `.env`, then set `DB_BACKEND=postgres` to route `query_data` to Postgres. `pg_check.py` runs 22 hostile and normal queries and prints PASS or FAIL for each. In this mode `write_table` and `delete_records` return a clear "not ported yet" message instead of touching the old SQLite copy.
 
 ### Use the tools from Cursor
 

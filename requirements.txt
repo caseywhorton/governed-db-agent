@@ -72,6 +72,7 @@ ormsgpack==1.12.2
 packaging==26.3
 pathable==0.6.0
 platformdirs==4.13.0
+psycopg[binary]==3.3.9
 protobuf==7.36.2
 py-key-value-aio==0.4.6
 pycparser==3.11
