@@ -49,8 +49,7 @@ For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
 | Build guide (`BUILD_GUIDE.md`) | Done |
 | GitHub Actions workflow to run the tests | Done |
-| Dockerfile (runs the tests in a container) | Done |
-| docker-compose with Postgres | Planned |
+| Docker and docker-compose | Planned |
 | Postgres with role-based access (replaces SQLite) | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
@@ -272,23 +271,6 @@ python agent.py "Delete all flagged transactions"
 python approvals.py list   # the delete shows up here as a pending request
 ```
 
-### Run in Docker
-
-A `Dockerfile` builds a small image (`python:3.13-slim`, running as a non-root user) with the dependencies from `requirements.txt`. `.dockerignore` keeps `.env`, the databases, and the audit log out of the image, so no secret is ever baked in.
-
-```bash
-docker build -t governed-db-agent .
-
-docker run --rm governed-db-agent             # runs the guardrail tests (the image's default command)
-docker run --rm -it governed-db-agent bash    # opens a shell inside the container
-```
-
-Keys are never copied into the image. To give a container your keys, pass them at run time with `--env-file .env`, and keep the values in that file free of inline `#` comments, which Docker does not strip.
-
-Without keys, the container prints a Langfuse "client will be disabled" notice. That is expected: tracing is off, and the tests do not need it.
-
-A `docker-compose.yml` with a Postgres service is planned (see the Roadmap).
-
 ### Use the tools from Cursor
 
 Open this project as the **top-level folder** in Cursor. The project-level config at `.cursor/mcp.json` is only picked up when the project root is the folder you opened.
@@ -327,7 +309,6 @@ python phase12_check.py                 # 11 end-to-end checks, traced in Langfu
 The unit tests need no model and no Cursor. They run against a throwaway copy of the database in a temporary folder, so real data, the audit log, and the approval queue are never touched. They cover:
 
 - realistic analyst queries (joins, CTEs, window functions, recursive CTEs, correlated subqueries)
-
 - about twenty ways of reading a restricted column, all refused
 - about twenty-five destructive or unsafe statements, refused by both tools
 - writes: workspace and temp tables, personal data rolled back, the row cap

@@ -30,6 +30,12 @@ SENSITIVE_COLUMNS: dict[str, set[str]] = {
 }
 
 
+# --- Postgres roles (used by generate_postgres_roles.py) ---------------------
+ANALYST_ROLE = "governed_analyst"    # agent/analysts: reads allowed columns only
+APPROVER_ROLE = "governed_approver"  # approval tool: same reads, plus DELETE below
+DELETABLE_TABLES = ("customers", "accounts", "transactions")  # customer_profiles deliberately absent
+
+
 def is_restricted(table: str, column: str) -> bool:
     return column.lower() in SENSITIVE_COLUMNS.get(table.lower(), set())
 

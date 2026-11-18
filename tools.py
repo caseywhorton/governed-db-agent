@@ -22,7 +22,7 @@ from sql_session import run_sql
 
 DB_PATH = Path("governed_agent.db")  # source data, used by the delete/approval path
 
-ALLOWED_TABLES = {"customers", "accounts", "transactions"}  # tables delete_records may touch
+ALLOWED_TABLES = set(policy.DELETABLE_TABLES)  # tables delete_records may touch
 MAX_DELETE_ROWS = 100  # blast-radius limit for a single delete request
 
 
