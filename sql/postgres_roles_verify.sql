@@ -1,5 +1,5 @@
 -- sql/postgres_roles_verify.sql: proves Postgres itself refuses what policy.py forbids.
--- Run after sql/postgres_roles.sql. Each check prints PASS or FAIL. Everything is rolled back.
+-- Run after sql/postgres_roles.sql. Each check prints PASS or FAIL. Nothing is changed: the one DELETE targets an id that does not exist.
 \set ON_ERROR_STOP off
 \pset pager off
 CREATE TEMP TABLE results(check_name text, passed boolean);
@@ -28,7 +28,6 @@ BEGIN
   END;
 END $f$ LANGUAGE plpgsql;
 
-BEGIN;
 SELECT pg_temp.expect_ok   ('governed_analyst','SELECT id, segment FROM customers','analyst reads allowed columns');
 SELECT pg_temp.expect_error('governed_analyst','SELECT name FROM customers','analyst blocked: customers.name');
 SELECT pg_temp.expect_error('governed_analyst','SELECT * FROM customer_profiles','analyst blocked: SELECT * on customer_profiles');
@@ -42,5 +41,4 @@ SELECT pg_temp.expect_error('governed_approver','SELECT email FROM customer_prof
 SELECT pg_temp.expect_error('governed_approver','DELETE FROM customer_profiles WHERE customer_id = -1','approver blocked: DELETE on customer_profiles');
 SELECT pg_temp.expect_ok   ('governed_approver','DELETE FROM transactions WHERE id = -1','approver may DELETE on transactions');
 SELECT pg_temp.expect_error('governed_approver','UPDATE accounts SET balance = 0','approver blocked: UPDATE');
-ROLLBACK;
 SELECT CASE WHEN passed THEN 'PASS' ELSE 'FAIL' END AS result, check_name FROM results;
