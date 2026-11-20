@@ -79,8 +79,10 @@ Everything in the data is synthetic, and `.env` is never committed.
 | docker-compose with Postgres | Done |
 | Postgres schema and seed data (`export_postgres_seed.py`) with a health-check script (`postgres_check.sql`) | Done |
 | Postgres roles and column-level grants generated from `policy.py` (`generate_postgres_roles.py`), with a pass/fail verification script | Done |
-| Python access layer that connects as the analyst role (replaces SQLite) | Planned |
-| Per-user workspace schemas, approval queue in Postgres, `pgaudit` | Planned |
+| Postgres read path: `query_data` as a least-privilege login role (`pg_session.py`), checks in `pg_check.py` | Done |
+| Postgres write path: `write_table` into an `analyst_ws` schema and temp tables, personal-data scan with rollback | Done |
+| Postgres delete/approval path, per-user workspace schemas | Planned |
+| Approval queue in Postgres, `pgaudit` | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
@@ -336,22 +338,51 @@ docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_c
 
 ```bash
 python generate_postgres_roles.py > postgres_roles.sql
-docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -P pager=off < postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="CHOOSE_ONE" -v reviewer_password="CHOOSE_ANOTHER" -P pager=off < postgres_roles.sql
 docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_roles_verify.sql
 ```
 
-`postgres_roles_verify.sql` prints PASS or FAIL for 13 checks proving Postgres itself refuses restricted columns (including in `WHERE` clauses and `SELECT *`), writes by the analyst, and deletes on `customer_profiles`. ### Query Postgres through the governed tool (read path)
+`postgres_roles_verify.sql` prints PASS or FAIL for 13 checks proving Postgres itself refuses restricted columns (including in `WHERE` clauses and `SELECT *`), writes by the analyst, and deletes on `customer_profiles`.
+
+### Query Postgres through the governed tool (read path)
 
 The app connects as a dedicated login role, `governed_agent`, which is a member of `governed_analyst` and nothing else. Create it by passing a password when you load the roles:
 
 ```bash
 python generate_postgres_roles.py > postgres_roles.sql
-docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -P pager=off < postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -v reviewer_password="$POSTGRES_REVIEWER_PASSWORD" -P pager=off < postgres_roles.sql
 pip install "psycopg[binary]"
 python pg_check.py
 ```
 
-Add `POSTGRES_AGENT_PASSWORD=...` (letters and digits only) and `POSTGRES_PORT=5433` to `.env`, then set `DB_BACKEND=postgres` to route `query_data` to Postgres. `pg_check.py` runs 22 hostile and normal queries and prints PASS or FAIL for each. In this mode `write_table` and `delete_records` return a clear "not ported yet" message instead of touching the old SQLite copy.
+Add `POSTGRES_AGENT_PASSWORD=...` (letters and digits only) and `POSTGRES_PORT=5433` to `.env`, then set `DB_BACKEND=postgres` to route `query_data` to Postgres. `pg_check.py` runs 41 hostile and normal checks and prints PASS or FAIL for each.
+
+**Writes.** `write_table` works in this mode too. Tables are created in a dedicated `analyst_ws` schema (the only place the analyst role has `CREATE`) or as real per-connection temp tables. Postgres refuses `CREATE` anywhere else and any write to a source table. The application still scans written rows for personal data and rolls the whole statement back if it finds any, because Postgres controls who may write, not what gets written. 
+The write checks leave one table behind on purpose, `analyst_ws.pgcheck_ws`. To remove it:
+
+```bash
+docker compose exec -T db psql -U governed -d governed -c "DROP TABLE IF EXISTS analyst_ws.pgcheck_ws"
+```
+
+### Deletes and approvals on Postgres
+
+With `DB_BACKEND=postgres`, `delete_records` works end to end, and the approval queue is a Postgres table (`approvals.requests`) instead of `approvals.db`. Two different database identities are involved, and Postgres, not Python, keeps them apart:
+
+| | `governed_agent` (the agent) | `governed_reviewer` (the human approver) |
+|---|---|---|
+| Approval queue | `INSERT` of a request's tool, arguments, preview and source, and read its new id. **Cannot** set a status, read the queue, update or delete a row | Read the queue; set `status`, `reviewer` and `result`. Cannot rewrite arguments or delete rows |
+| Source data | `SELECT` on allowed columns | Same reads, plus `DELETE` on `DELETABLE_TABLES` only |
+| Dry-run preview | Runs as this identity, so it can only ever show allowed columns | |
+
+An approval records the reviewer's **database role** next to their name, so "who approved this" is an identity the database vouches for, not just a username in a log.
+
+**Keep the reviewer's password out of `.env`.** The agent's process loads `.env`; if the approver's password were there, that process could connect as the approver. Export it only in the shell where you run `approvals.py`:
+
+```bash
+export POSTGRES_REVIEWER_PASSWORD=...   # same value you passed as reviewer_password
+python pg_approvals_check.py            # 29 checks; deletes nothing (the one real delete is rolled back)
+DB_BACKEND=postgres python approvals.py list
+```
 
 ### Use the tools from Cursor
 
@@ -427,6 +458,12 @@ export_postgres_seed.py  # exports the SQLite data as Postgres schema and seed S
 postgres_check.sql     # pass/fail health checks for the loaded Postgres data
 generate_postgres_roles.py  # builds roles and column-level grants from policy.py
 postgres_roles_verify.sql   # proves Postgres refuses what the policy forbids
+pg_session.py          # query_data against Postgres as the analyst login role
+pg_check.py            # 41 pass/fail checks for the Postgres read and write paths
+pg_conn.py             # connections as the agent identity and the reviewer identity
+pg_delete.py           # Postgres delete preview (agent identity) and execution (reviewer identity)
+approval_store_pg.py   # the approval queue as a Postgres table
+pg_approvals_check.py  # end-to-end checks for the delete and approval path
 BUILD_GUIDE.md         # step-by-step guide to building the project
 .cursor/mcp.json       # Cursor config for the MCP server
 .cursor/rules/         # Cursor rule that warns users about destructive requests
@@ -465,7 +502,7 @@ The system works end to end on SQLite. The next stages move it onto infrastructu
 | # | Stage | What gets built | Limitations it addresses |
 |---|---|---|---|
 | 1 | **Containers** (done) | A Dockerfile and `.dockerignore` (so `.env` and the databases never enter an image), and a `docker-compose.yml` running the app next to Postgres | Setup problems that only appear on one machine |
-| 2 | **Postgres** (in progress: schema, seed data, roles and column-level grants done and verified; access layer next) | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
+| 2 | **Postgres** (in progress: schema, seed data, roles, column-level grants and the read path done and verified; write and delete paths next) | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
 | 3 | **Service** | A FastAPI service with `/chat` and approval endpoints, authentication, per-user chat history and sessions, and request expiry | Shared session and self-declared `source`; minimal approval |
 | 4 | **Data protection** | Mask personal data in the audit log and Langfuse, and suppress or flag results built from very small groups | Raw queries in logs; small-group re-identification |
 | 5 | **Deployment** (optional) | A managed host with Postgres, secrets management, TLS, and a deploy step in CI. Never public without authentication | |

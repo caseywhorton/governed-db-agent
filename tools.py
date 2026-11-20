@@ -31,11 +31,7 @@ else:
 DB_PATH = Path("governed_agent.db")  # source data, used by the delete/approval path
 
 ALLOWED_TABLES = set(policy.DELETABLE_TABLES)  # tables delete_records may touch
-MSG_DELETE_NOT_PORTED = (
-    "delete_records is not available on the Postgres backend yet, so it will not touch the "
-    "old SQLite copy by accident."
-)
-MAX_DELETE_ROWS = 100  # blast-radius limit for a single delete request
+MAX_DELETE_ROWS = policy.MAX_DELETE_ROWS  # blast-radius limit for a single delete request
 
 
 # --- query_data and write_table ------------------------------------------------
@@ -167,7 +163,9 @@ def preview_delete(table: str, filters: dict) -> dict:
     sample rows.
     """
     if _BACKEND == "postgres":
-        return {"ok": False, "error": MSG_DELETE_NOT_PORTED}
+        import pg_delete
+
+        return pg_delete.preview(table, filters)
     try:
         conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     except sqlite3.Error as e:
@@ -219,7 +217,9 @@ def delete_records(table: str, filters: dict) -> dict:
     the request through approvals.py.
     """
     if _BACKEND == "postgres":
-        return {"ok": False, "error": MSG_DELETE_NOT_PORTED}
+        import pg_delete
+
+        return pg_delete.execute(table, filters)
     try:
         conn = sqlite3.connect(DB_PATH)
     except sqlite3.Error as e:

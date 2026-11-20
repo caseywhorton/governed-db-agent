@@ -35,6 +35,9 @@ ANALYST_ROLE = "governed_analyst"    # agent/analysts: reads allowed columns onl
 APPROVER_ROLE = "governed_approver"  # approval tool: same reads, plus DELETE below
 DELETABLE_TABLES = ("customers", "accounts", "transactions")  # customer_profiles deliberately absent
 AGENT_LOGIN_ROLE = "governed_agent"  # the login the app connects as; a member of ANALYST_ROLE only
+WORKSPACE_SCHEMA = "analyst_ws"  # the only schema the analyst may create tables in
+REVIEWER_LOGIN_ROLE = "governed_reviewer"  # the human approver's login; a member of APPROVER_ROLE only
+MAX_DELETE_ROWS = 100  # blast-radius limit for a single delete request
 
 
 def is_restricted(table: str, column: str) -> bool:

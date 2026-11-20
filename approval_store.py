@@ -130,3 +130,20 @@ def finish_request(request_id: int, status: str, result: dict) -> None:
             (status, json.dumps(result, default=str), request_id),
         )
         conn.commit()
+
+
+# --- Postgres backend ------------------------------------------------------------------
+# With DB_BACKEND=postgres the queue lives in the approvals.requests table instead.
+# Same function names and results, so permissions.py and approvals.py don't change.
+import os  # noqa: E402
+
+if os.getenv("DB_BACKEND", "sqlite").strip().lower() == "postgres":
+    from approval_store_pg import (  # noqa: E402,F401
+        _now,
+        claim_request,
+        create_request,
+        deny_request,
+        finish_request,
+        get_request,
+        list_requests,
+    )

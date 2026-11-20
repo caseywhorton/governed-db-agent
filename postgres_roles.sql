@@ -6,10 +6,15 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'governed_approver') THEN CREATE ROLE governed_approver NOLOGIN; END IF;
 END $$;
 
--- The login the app connects as. Needs a password: pass -v agent_password=...
+-- Two logins, two passwords: pass -v agent_password=... -v reviewer_password=...
 \if :{?agent_password}
 \else
-  \echo 'Missing password. Run psql with: -v agent_password="$POSTGRES_AGENT_PASSWORD"'
+  \echo 'Missing agent_password. Run psql with: -v agent_password=VALUE -v reviewer_password=VALUE'
+  \quit
+\endif
+\if :{?reviewer_password}
+\else
+  \echo 'Missing reviewer_password. Run psql with: -v agent_password=VALUE -v reviewer_password=VALUE'
   \quit
 \endif
 SELECT 'CREATE ROLE governed_agent LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'
@@ -18,6 +23,51 @@ SELECT format('ALTER ROLE governed_agent PASSWORD %L', :'agent_password') \gexec
 GRANT governed_analyst TO governed_agent;
 ALTER ROLE governed_agent SET default_transaction_read_only = on;
 ALTER ROLE governed_agent SET statement_timeout = '5s';
+ALTER ROLE governed_agent SET search_path = public, analyst_ws;
+
+-- The analyst's workspace: the only place tables can be created.
+CREATE SCHEMA IF NOT EXISTS analyst_ws;
+REVOKE ALL ON SCHEMA analyst_ws FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA analyst_ws TO governed_analyst;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC, governed_analyst, governed_approver, governed_agent;
+
+SELECT 'CREATE ROLE governed_reviewer LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'governed_reviewer') \gexec
+SELECT format('ALTER ROLE governed_reviewer PASSWORD %L', :'reviewer_password') \gexec
+GRANT governed_approver TO governed_reviewer;
+ALTER ROLE governed_reviewer SET statement_timeout = '5s';
+ALTER ROLE governed_reviewer SET search_path = public;
+
+-- The approval queue. The agent may only file requests; a human identity decides them.
+CREATE SCHEMA IF NOT EXISTS approvals;
+CREATE TABLE IF NOT EXISTS approvals.requests (
+  id bigserial PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  tool text NOT NULL,
+  risk text NOT NULL,
+  args text NOT NULL,
+  kwargs text NOT NULL,
+  preview text,
+  status text NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','approved','denied','executed','failed')),
+  reviewer text,
+  reviewer_role text,
+  reviewed_at timestamptz,
+  result text,
+  source text
+);
+REVOKE ALL ON SCHEMA approvals FROM PUBLIC;
+GRANT USAGE ON SCHEMA approvals TO governed_analyst, governed_approver;
+REVOKE ALL ON approvals.requests FROM PUBLIC, governed_analyst, governed_approver, governed_agent, governed_reviewer;
+REVOKE ALL ON SEQUENCE approvals.requests_id_seq FROM PUBLIC, governed_analyst, governed_approver;
+-- Agent: file a request and learn its id. Nothing else: it cannot set the status
+-- (column-level INSERT), cannot read the queue, cannot update or delete a row.
+GRANT INSERT (tool, risk, args, kwargs, preview, source) ON approvals.requests TO governed_analyst;
+GRANT SELECT (id) ON approvals.requests TO governed_analyst;
+GRANT USAGE ON SEQUENCE approvals.requests_id_seq TO governed_analyst;
+-- Reviewer: read the queue and record decisions. Rows are never deleted.
+GRANT SELECT ON approvals.requests TO governed_approver;
+GRANT UPDATE (status, reviewer, reviewer_role, reviewed_at, result) ON approvals.requests TO governed_approver;
 
 -- Start from nothing, so re-running removes anything policy.py no longer allows.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM governed_analyst, governed_approver, governed_agent;
