@@ -81,8 +81,9 @@ Everything in the data is synthetic, and `.env` is never committed.
 | Postgres roles and column-level grants generated from `policy.py` (`generate_postgres_roles.py`), with a pass/fail verification script | Done |
 | Postgres read path: `query_data` as a least-privilege login role (`pg_session.py`), checks in `pg_check.py` | Done |
 | Postgres write path: `write_table` into an `analyst_ws` schema and temp tables, personal-data scan with rollback | Done |
-| Postgres delete/approval path, per-user workspace schemas | Planned |
-| Approval queue in Postgres, `pgaudit` | Planned |
+| Postgres delete and approval path: queue as a table the agent can only insert into, separate reviewer login, reviewer's database role recorded on each approval (`pg_delete.py`, `approval_store_pg.py`, `pg_approvals_check.py`) | Done |
+| Per-user workspace schemas (needs real user identity) | Planned |
+| `pgaudit`, and the 47 guardrail tests run against Postgres in CI | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
@@ -474,8 +475,12 @@ img/                   # screenshots used in this README
 
 ## Known limitations
 
+Bullets marked **(SQLite)** describe the default backend and are addressed by the Postgres backend (`DB_BACKEND=postgres`); the notes under each say what remains.
+
 - **The audit log and Langfuse traces store raw queries and arguments; production use would require redaction and access controls.** They can contain sensitive values (identifiers, personal data), and recording them verbatim copies that data into additional, less protected locations: a local file and a third-party observability service. Query results are masked, but the SQL text of a blocked attempt can still name a restricted column. Here the data is synthetic, so this is acceptable for a demo, but a real deployment would mask values before logging, restrict access to both stores, and define retention rules.
-- **The permission layer governs calls that go through the tools, not everything a client can do, and SQLite has no users or roles to prevent the rest.** An agent with terminal access, such as Cursor's, can run `sqlite3` against a database file directly and bypass these controls. The screenshot below shows this happening with `approvals.db`, and the same route reaches the data files. A real deployment would close the gap with database-level permissions (for example Postgres roles with column-level grants or row-level security), so the governed path is the agent's only route to the data.
+- **(SQLite) The permission layer governs calls that go through the tools, not everything a client can do, and SQLite has no users or roles to prevent the rest.** An agent with terminal access, such as Cursor's, can run `sqlite3` against a database file directly and bypass these controls. The screenshot below shows this happening with `approvals.db`, and the same route reaches the data files. A real deployment would close the gap with database-level permissions (for example Postgres roles with column-level grants or row-level security), so the governed path is the agent's only route to the data.
+
+  **On Postgres this gap is closed for the data itself:** the agent's login role physically cannot read restricted columns, change source tables, or touch the approval queue, and `pg_check.py` and `pg_approvals_check.py` prove it. What remains: an agent with terminal access could still connect with the agent's credentials from `.env` and use `psql` directly. It would get the same restricted rights, but it would skip the application-level checks (the personal-data scan on writes, masking, the audit log). Closing that needs the agent's credentials held by a service rather than a file.
 
   <p align="center">
     <img src="img/select_from_approvals_db.jpg" alt="Cursor querying approvals.db directly with sqlite3" width="600"><br>
@@ -483,9 +488,9 @@ img/                   # screenshots used in this README
   </p>
 
 - **Prompts typed in Cursor reach the model provider before any tool is called.** The tools govern what data comes back, not what a person types, and the MCP path has no hook to inspect the prompt. Privacy Mode and organization controls limit retention, but the text is still sent. The LangGraph agent is the only path where a pre-model input check would be possible.
-- **Approver identity is the local OS username, and the approval tool is only separate by convention.** An agent with terminal access could run `approvals.py` itself and type `approve`. Real separation of duties needs an approver identity the agent cannot use, such as authenticated reviewers in a separate service.
-- **`approvals.db` has no integrity protection.** Anyone with write access to the file can alter requests. Approving always re-runs the preview on the stored arguments, so the reviewer sees what will execute, but a production system would sign requests and store them in a controlled service.
-- **Approval is minimal.** There is a single approver, no expiry on pending requests, and no escalation or quorum rules.
+- **(SQLite) Approver identity is the local OS username, and the approval tool is only separate by convention.** An agent with terminal access could run `approvals.py` itself and type `approve`. Real separation of duties needs an approver identity the agent cannot use, such as authenticated reviewers in a separate service. **On Postgres** the approver is a separate database login (`governed_reviewer`) whose password is kept out of `.env`, and each approval records that database role. There is still one shared reviewer login rather than one identity per person, which needs the authentication stage.
+- **(SQLite) `approvals.db` has no integrity protection.** Anyone with write access to the file can alter requests. On Postgres the agent can only insert requests and cannot read or change them; the reviewer can update a request's decision but not its arguments or delete it. Approving always re-runs the preview on the stored arguments, so the reviewer sees what will execute, but a production system would sign requests and store them in a controlled service.
+- **Approval is minimal.** There is a single reviewer login, no expiry on pending requests, and no escalation or quorum rules.
 - **Deletes are narrow by design.** Filters support equality only, `customer_profiles` is not on the delete allow-list, and there is no cascade option: deleting a row that other rows reference is blocked by foreign keys rather than propagated.
 - **Pattern detectors are not a complete privacy control.** They catch common SSN, email, phone, and card shapes. Names, birthdates, and street addresses have no reliable pattern, so those are protected only by the restricted-column list: an analyst can be stopped from copying them out of the source tables, but not from typing one into a table by hand. The detectors can also false-positive on numbers that look like cards.
 - **Small groups can identify individuals.** Allowed columns such as city, credit band, and signup date can single out a person in a small group, and there is no small-group suppression yet. In the sample data one credit band covers only two customers.
@@ -493,16 +498,16 @@ img/                   # screenshots used in this README
 - **A few SQL constructs are refused by a text check**, because SQLite does not report them to the authorizer (`NATURAL JOIN`, `JOIN ... USING`, upserts and `OR REPLACE`, and a handful of maintenance statements). That check blanks string literals and comments first, but it is not a full SQL parser. The authorizer remains the main enforcement, and new SQLite features could add new paths, which is why every rule has a test.
 - **Third-party MCP servers run outside these controls.** Only tools wrapped with `@requires_permission` get risk tiers, approval gating, audit logging, and tracing.
 - Cursor's model runs inside Cursor, so calls made through the MCP server have tool-level traces but no model or token details. Cursor's own approval prompts are a separate layer from this project's.
-- **One shared session.** The autonomy policy is a single global setting, and there is no per-user isolation: temp tables are shared inside one running server, and the `source` tag is self-declared by each client. A real system would scope permissions per user, per agent, and per environment.
+- **One shared session.** The autonomy policy is a single global setting, and there is no per-user isolation: temp tables are shared inside one running server, the Postgres workspace schema (`analyst_ws`) is shared by every user, and the `source` tag is self-declared by each client. A real system would scope permissions per user, per agent, and per environment.
 
 ## Roadmap
 
-The system works end to end on SQLite. The next stages move it onto infrastructure where the platform enforces the controls instead of the application simulating them, in this order:
+The system works end to end on SQLite, and on Postgres for reading, writing and approved deletes. The next stages move the rest onto infrastructure where the platform enforces the controls instead of the application simulating them, in this order:
 
 | # | Stage | What gets built | Limitations it addresses |
 |---|---|---|---|
 | 1 | **Containers** (done) | A Dockerfile and `.dockerignore` (so `.env` and the databases never enter an image), and a `docker-compose.yml` running the app next to Postgres | Setup problems that only appear on one machine |
-| 2 | **Postgres** (in progress: schema, seed data, roles, column-level grants and the read path done and verified; write and delete paths next) | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
+| 2 | **Postgres** (mostly done: schema, seed data, roles, column-level grants, and the read, write and delete/approval paths, each verified by pass/fail checks; `pgaudit`, per-user workspaces and Postgres in CI remain) | The schema and seed data ported to Postgres. An analyst role with column-level `SELECT` and rights only in its own schema, and a separate approver role that can delete. Views that expose only safe columns. Per-user workspace schemas with real per-connection temp tables. The approval queue as a table the agent can only insert into. `pgaudit` for database-level logging. The same tests run against Postgres in CI | Terminal bypass; no integrity protection on `approvals.db`; shared approver identity; shared session |
 | 3 | **Service** | A FastAPI service with `/chat` and approval endpoints, authentication, per-user chat history and sessions, and request expiry | Shared session and self-declared `source`; minimal approval |
 | 4 | **Data protection** | Mask personal data in the audit log and Langfuse, and suppress or flag results built from very small groups | Raw queries in logs; small-group re-identification |
 | 5 | **Deployment** (optional) | A managed host with Postgres, secrets management, TLS, and a deploy step in CI. Never public without authentication | |
