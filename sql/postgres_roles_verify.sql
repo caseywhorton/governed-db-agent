@@ -1,5 +1,5 @@
--- postgres_roles_verify.sql: proves Postgres itself refuses what policy.py forbids.
--- Run after postgres_roles.sql. Each check prints PASS or FAIL. Everything is rolled back.
+-- sql/postgres_roles_verify.sql: proves Postgres itself refuses what policy.py forbids.
+-- Run after sql/postgres_roles.sql. Each check prints PASS or FAIL. Everything is rolled back.
 \set ON_ERROR_STOP off
 \pset pager off
 CREATE TEMP TABLE results(check_name text, passed boolean);

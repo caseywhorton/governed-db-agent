@@ -1,14 +1,14 @@
 """
-export_postgres_seed.py — Write postgres_seed.sql: the project's schema and sample data as SQL for Postgres.
+export_postgres_seed.py — Write sql/postgres_seed.sql: the project's schema and sample data as SQL for Postgres.
 
-    python export_postgres_seed.py                  # writes postgres_seed.sql
+    python export_postgres_seed.py                  # writes sql/postgres_seed.sql
     python export_postgres_seed.py --out other.sql
 
 It reuses the generator in setup_db.py (same seed), so Postgres gets exactly the rows SQLite has:
 the three original customers plus the generated ones. Nothing in your SQLite database is read or changed.
 
 Load the result with:
-    docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -P pager=off < postgres_seed.sql
+    docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -P pager=off < sql/postgres_seed.sql
 
 The script is safe to run again: tables use IF NOT EXISTS and every insert uses ON CONFLICT DO NOTHING.
 
@@ -126,10 +126,11 @@ def build_sql():
 
 def main():
     parser = argparse.ArgumentParser(description="Export the sample data as Postgres SQL.")
-    parser.add_argument("--out", default="postgres_seed.sql")
+    parser.add_argument("--out", default="sql/postgres_seed.sql")
     args = parser.parse_args()
 
     sql, counts = build_sql()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(sql)
     print(f"Wrote {args.out} ({len(sql):,} characters). Expected row counts after loading:")
     for table, n in counts.items():

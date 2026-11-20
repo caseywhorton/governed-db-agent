@@ -3,8 +3,8 @@
 Turns policy.py into Postgres roles and grants, so the database enforces the same
 rules the Python code does. policy.py stays the single source of truth.
 
-    python generate_postgres_roles.py > postgres_roles.sql
-    docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -P pager=off < postgres_roles.sql
+    python generate_postgres_roles.py > sql/postgres_roles.sql
+    docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password=... -v reviewer_password=... -P pager=off < sql/postgres_roles.sql
 
 Roles are NOLOGIN (used through SET ROLE), so there are no passwords to manage.
 Column lists are computed inside Postgres from information_schema, so a restricted

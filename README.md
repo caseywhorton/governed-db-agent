@@ -21,7 +21,7 @@ Giving an agent database access is easy. Giving it access safely is the hard par
 
 The same governed tools are reachable from two different clients, a LangGraph agent and Cursor (via an MCP server), and the same permission layer handles both. Governance that lives in the tools, not in any one model or client, is the core idea.
 
-For a step-by-step walkthrough of building it from an empty folder, see [`BUILD_GUIDE.md`](BUILD_GUIDE.md).
+For a step-by-step walkthrough of building it from an empty folder, see [`docs/BUILD_GUIDE.md`](docs/BUILD_GUIDE.md).
 
 ## Quickstart
 
@@ -73,7 +73,7 @@ Everything in the data is synthetic, and `.env` is never committed.
 | Dry-run preview, including foreign-key impact | Done |
 | Human-in-the-loop approval gate (`approvals.py`) | Done |
 | `source` field on audit entries, requests, and traces (which client made the call) | Done |
-| Build guide (`BUILD_GUIDE.md`) | Done |
+| Build guide (`docs/BUILD_GUIDE.md`) | Done |
 | GitHub Actions workflow to run the tests | Done |
 | Dockerfile (runs the tests in a container) | Done |
 | docker-compose with Postgres | Done |
@@ -83,7 +83,7 @@ Everything in the data is synthetic, and `.env` is never committed.
 | Postgres write path: `write_table` into an `analyst_ws` schema and temp tables, personal-data scan with rollback | Done |
 | Postgres delete and approval path: queue as a table the agent can only insert into, separate reviewer login, reviewer's database role recorded on each approval (`pg_delete.py`, `approval_store_pg.py`, `pg_approvals_check.py`) | Done |
 | Per-user workspace schemas (needs real user identity) | Planned |
-| `pgaudit`, and the 47 guardrail tests run against Postgres in CI | Planned |
+| `pgaudit`, and the 47 hostile-SQL tests ported to run against Postgres | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
@@ -259,6 +259,11 @@ Four related tables. The original three keep their ids; `setup_db.py` adds gener
 
 Columns marked `*` are restricted personal data. All values are synthetic.
 
+<p align="center">
+  <img src="img/erd.png" alt="The four tables as they appear in Postgres, viewed in pgAdmin" width="700"><br>
+  <em>The same tables in Postgres, as pgAdmin's ERD tool shows them. Column types are Postgres types (for example <code>numeric(12,2)</code>). The foreign keys (<code>accounts.customer_id</code>, <code>transactions.account_id</code>, <code>customer_profiles.customer_id</code>) are listed in the table above; this view does not draw them. Columns marked <code>*</code> above are the ones the database refuses to show the agent's login role.</em>
+</p>
+
 Two SQLite files:
 
 - `governed_agent.db` — source data, attached read-only inside the analyst session
@@ -325,9 +330,9 @@ Without keys, the container prints a Langfuse "client will be disabled" notice. 
 
 ```bash
 docker compose up -d db
-python export_postgres_seed.py > postgres_seed.sql
-docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_seed.sql
-docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_check.sql
+python export_postgres_seed.py          # writes sql/postgres_seed.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < sql/postgres_seed.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < sql/postgres_check.sql
 ```
 
 ### Postgres roles generated from the policy
@@ -338,9 +343,9 @@ docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_c
 - `governed_approver` has the same reads plus `DELETE` on the tables in `DELETABLE_TABLES` (`customer_profiles` is deliberately excluded).
 
 ```bash
-python generate_postgres_roles.py > postgres_roles.sql
-docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="CHOOSE_ONE" -v reviewer_password="CHOOSE_ANOTHER" -P pager=off < postgres_roles.sql
-docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_roles_verify.sql
+python generate_postgres_roles.py > sql/postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="CHOOSE_ONE" -v reviewer_password="CHOOSE_ANOTHER" -P pager=off < sql/postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < sql/postgres_roles_verify.sql
 ```
 
 `postgres_roles_verify.sql` prints PASS or FAIL for 13 checks proving Postgres itself refuses restricted columns (including in `WHERE` clauses and `SELECT *`), writes by the analyst, and deletes on `customer_profiles`.
@@ -350,8 +355,8 @@ docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_r
 The app connects as a dedicated login role, `governed_agent`, which is a member of `governed_analyst` and nothing else. Create it by passing a password when you load the roles:
 
 ```bash
-python generate_postgres_roles.py > postgres_roles.sql
-docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -v reviewer_password="$POSTGRES_REVIEWER_PASSWORD" -P pager=off < postgres_roles.sql
+python generate_postgres_roles.py > sql/postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -v reviewer_password="$POSTGRES_REVIEWER_PASSWORD" -P pager=off < sql/postgres_roles.sql
 pip install "psycopg[binary]"
 python pg_check.py
 ```
@@ -433,6 +438,8 @@ The unit tests need no model and no Cursor. They run against a throwaway copy of
 
 The same tests run automatically in GitHub Actions on every push and pull request (`.github/workflows/tests.yml`), on a fresh machine with no secrets, so a change that weakens a guardrail turns the run red.
 
+The workflow has two jobs. The first runs the guardrail tests against SQLite. The second starts a throwaway Postgres container, loads the seed data, generates the roles from `policy.py`, and runs the pass/fail checks (`sql/postgres_check.sql`, `sql/postgres_roles_verify.sql`, `pg_check.py`, `pg_approvals_check.py`) against it, so the claim that Postgres itself enforces the rules is re-proven on every push. Its passwords are throwaway values for a container that is destroyed when the job ends.
+
 ### What attacking my own design found
 
 One of the adversarial tests found a real hole. The first version allowed `JOIN ... USING` and `NATURAL JOIN`. SQLite builds those equality conditions internally, so the authorizer never saw a restricted column being compared. An analyst could write a table of guessed names (names have no detectable pattern, so the write was allowed) and run `JOIN guesses USING (full_name)` to learn which guesses exist and which customer they belong to. Those two join forms are now refused with a message pointing to `ON`, and the attack is a permanent regression test.
@@ -456,16 +463,15 @@ phase12_check.py       # end-to-end checks run directly against the tools
 langfuse_check.py      # smoke test for Langfuse credentials and tracing
 docker-compose.yml     # Postgres 17 service (and the app) for local development
 export_postgres_seed.py  # exports the SQLite data as Postgres schema and seed SQL
-postgres_check.sql     # pass/fail health checks for the loaded Postgres data
 generate_postgres_roles.py  # builds roles and column-level grants from policy.py
-postgres_roles_verify.sql   # proves Postgres refuses what the policy forbids
 pg_session.py          # query_data against Postgres as the analyst login role
 pg_check.py            # 41 pass/fail checks for the Postgres read and write paths
 pg_conn.py             # connections as the agent identity and the reviewer identity
 pg_delete.py           # Postgres delete preview (agent identity) and execution (reviewer identity)
 approval_store_pg.py   # the approval queue as a Postgres table
 pg_approvals_check.py  # end-to-end checks for the delete and approval path
-BUILD_GUIDE.md         # step-by-step guide to building the project
+sql/                   # postgres_seed.sql, postgres_roles.sql (generated), and the pass/fail check scripts
+docs/                  # BUILD_GUIDE.md: step-by-step guide to building the project
 .cursor/mcp.json       # Cursor config for the MCP server
 .cursor/rules/         # Cursor rule that warns users about destructive requests
 .github/workflows/     # GitHub Actions workflow that runs the tests

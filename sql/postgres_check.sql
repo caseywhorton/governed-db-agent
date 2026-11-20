@@ -6,7 +6,7 @@
 -- so run one query at a time. Click inside a query (or highlight it) and press F5.
 -- From the terminal, this prints every result:
 --
---   docker compose exec -T db psql -U governed -d governed -P pager=off < postgres_check.sql
+--   docker compose exec -T db psql -U governed -d governed -P pager=off < sql/postgres_check.sql
 --
 -- The expected numbers come from the seeded sample data (python export_postgres_seed.py).
 
