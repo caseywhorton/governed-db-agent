@@ -95,7 +95,7 @@ jobs:
       - name: Verify the roles (Postgres refuses what policy.py forbids)
         run: |
           psql -f sql/postgres_roles_verify.sql | tee /tmp/roles-check.txt
-          grep -qw PASS /tmp/roles-check.txt
+          test "$(grep -cw PASS /tmp/roles-check.txt)" -eq 13
           ! grep -qw FAIL /tmp/roles-check.txt
 
       - name: Read and write path checks
