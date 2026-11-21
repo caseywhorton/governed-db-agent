@@ -1,0 +1,6 @@
+# Postgres with the pgaudit extension, for local development. The stock postgres:17 image
+# does not include it. The PGDG apt repository is already configured in the base image.
+FROM postgres:17
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-17-pgaudit \
+    && rm -rf /var/lib/apt/lists/*

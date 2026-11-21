@@ -83,7 +83,8 @@ Everything in the data is synthetic, and `.env` is never committed.
 | Postgres write path: `write_table` into an `analyst_ws` schema and temp tables, personal-data scan with rollback | Done |
 | Postgres delete and approval path: queue as a table the agent can only insert into, separate reviewer login, reviewer's database role recorded on each approval (`pg_delete.py`, `approval_store_pg.py`, `pg_approvals_check.py`) | Done |
 | Per-user workspace schemas (needs real user identity) | Planned |
-| `pgaudit`, and the 47 hostile-SQL tests ported to run against Postgres | Planned |
+| `pgaudit` database audit trail: what the database actually ran, per identity (`Dockerfile.postgres`, `sql/pgaudit_check.sql`) | Done |
+| The 47 hostile-SQL tests ported to run against Postgres | Planned |
 | FastAPI chat service with authentication | Planned |
 | Deployment | Planned (optional) |
 
@@ -390,6 +391,30 @@ python pg_approvals_check.py            # 29 checks; deletes nothing (the one re
 DB_BACKEND=postgres python approvals.py list
 ```
 
+### Audit logging inside the database (pgaudit)
+
+The application already logs what the agent *asked* for (`audit_log.jsonl` and Langfuse). `pgaudit` adds a record of what the database actually *ran*, written by Postgres itself, so it covers statements that never went through the application (for example someone using `psql` with the agent's credentials) and statements the database refused.
+
+- The `db` service now builds from `Dockerfile.postgres` (Postgres 17 plus the `pgaudit` extension) and preloads it. After pulling this change, rebuild once: `docker compose up -d --build db`.
+- `generate_postgres_roles.py` configures it when the server has it: the agent and reviewer logins log every read, write and DDL statement (one line per table touched), and the database default logs structural and role changes. On a stock Postgres the same script skips this step, which is why CI is unaffected.
+
+```bash
+docker compose up -d --build db
+python generate_postgres_roles.py > sql/postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -v ON_ERROR_STOP=1 -v agent_password="$POSTGRES_AGENT_PASSWORD" -v reviewer_password="$POSTGRES_REVIEWER_PASSWORD" -P pager=off < sql/postgres_roles.sql
+docker compose exec -T db psql -U governed -d governed -P pager=off < sql/pgaudit_check.sql
+```
+
+`sql/pgaudit_check.sql` prints PASS or FAIL for 5 configuration checks. To see the log itself, generate some activity (`python pg_check.py`) and read it back:
+
+```bash
+docker compose logs db | grep AUDIT | tail -20
+```
+
+Each line records the database identity, the kind of statement, the table, and the statement text. Two things to know when reading it: `pgaudit` logs that a statement *ran*, not that it was committed, so a write the application then rolled back (for example one that contained a fake SSN) still appears, and you correlate it with the application's audit log to see the outcome; and a named cursor, which `query_data` uses, appears as both a `SELECT` and a `DECLARE CURSOR` line.
+
+The audit lines contain the statement text, including any literal values the statement carried, in the container's log. That is the same trade-off described under "Known limitations" for the application log: fine for synthetic data, but a real deployment would restrict access to these logs and set retention rules.
+
 ### Use the tools from Cursor
 
 Open this project as the **top-level folder** in Cursor. The project-level config at `.cursor/mcp.json` is only picked up when the project root is the folder you opened.
@@ -462,6 +487,7 @@ test_guardrails.py     # tests for restricted columns, writes, and hostile SQL
 phase12_check.py       # end-to-end checks run directly against the tools
 langfuse_check.py      # smoke test for Langfuse credentials and tracing
 docker-compose.yml     # Postgres 17 service (and the app) for local development
+Dockerfile.postgres    # Postgres 17 plus the pgaudit extension, used by docker-compose.yml
 export_postgres_seed.py  # exports the SQLite data as Postgres schema and seed SQL
 generate_postgres_roles.py  # builds roles and column-level grants from policy.py
 pg_session.py          # query_data against Postgres as the analyst login role

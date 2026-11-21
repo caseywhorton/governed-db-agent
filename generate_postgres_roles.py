@@ -122,6 +122,30 @@ def generate() -> str:
     out += ["",
             "-- Postgres needs SELECT on the filtered columns for DELETE ... WHERE; the key columns above cover that.",
             "-- Restricted tables not listed in DELETABLE_TABLES get no DELETE for anyone.", ""]
+    a_, l_, r_ = a, l, r
+    out += [
+        "-- Audit trail inside the database (pgaudit). Only configured when the server preloads",
+        "-- the extension (see Dockerfile.postgres); on a stock Postgres this block does nothing.",
+        "-- The application keeps its own log of what was ASKED; this records what the database RAN.",
+        "DO $$",
+        "BEGIN",
+        "  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pgaudit')",
+        "     AND current_setting('shared_preload_libraries') LIKE '%pgaudit%' THEN",
+        "    CREATE EXTENSION IF NOT EXISTS pgaudit;",
+        "    -- Database default: only structural changes and role changes (the admin's own work).",
+        "    EXECUTE format('ALTER DATABASE %I SET pgaudit.log = %L', current_database(), 'role, ddl');",
+        "    EXECUTE format('ALTER DATABASE %I SET pgaudit.log_relation = on', current_database());",
+        "    EXECUTE format('ALTER DATABASE %I SET pgaudit.log_catalog = off', current_database());",
+        "    -- The two application identities: every read, write and DDL statement, one line per table.",
+        f"    ALTER ROLE {l_} SET pgaudit.log = 'read, write, ddl';",
+        f"    ALTER ROLE {r_} SET pgaudit.log = 'read, write, ddl';",
+        "    RAISE NOTICE 'pgaudit configured';",
+        "  ELSE",
+        "    RAISE NOTICE 'pgaudit is not available on this server: skipping database-level audit logging';",
+        "  END IF;",
+        "END $$;",
+        "",
+    ]
     return "\n".join(out)
 
 
